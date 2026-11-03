@@ -1,0 +1,7 @@
+export enum ItemStatus {
+  CREATED = 'CREATED',
+  IN_TRANSIT = 'IN_TRANSIT',
+  AT_DOCK = 'AT_DOCK',
+  DELIVERED = 'DELIVERED',
+  EXCEPTION = 'EXCEPTION',
+}

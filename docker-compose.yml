@@ -1,0 +1,23 @@
+# Local development infrastructure. Start with: docker compose up -d
+name: cross-dock-management
+
+services:
+  mongodb:
+    image: mongo:8.0
+    container_name: cross-dock-mongodb
+    restart: unless-stopped
+    ports:
+      # Host port 27018 avoids clashing with a local MongoDB on 27017.
+      # Bound to 127.0.0.1 because this local instance has no authentication.
+      - '127.0.0.1:27018:27017'
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongodb_data:
+    name: cross-dock-management-mongodb-data
