@@ -5,6 +5,7 @@ import configuration from './config/configuration';
 import { validationPipeOptions } from './config/validation.config';
 import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
+import { AuthModule } from './modules/auth/auth.module';
 import { DockTasksModule } from './modules/dock-tasks/dock-tasks.module';
 import { ItemsModule } from './modules/items/items.module';
 import { LocationsModule } from './modules/locations/locations.module';
@@ -18,6 +19,7 @@ import { UsersModule } from './modules/users/users.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
     DatabaseModule,
+    AuthModule,
     LocationsModule,
     UsersModule,
     ItemsModule,

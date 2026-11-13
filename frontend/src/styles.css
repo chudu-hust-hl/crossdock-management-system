@@ -92,6 +92,29 @@ main a {
   font-weight: 700;
 }
 
+/* The logged-in user and the Log out button, at the right end of the bar. */
+.app-header .session {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+  margin-left: auto;
+}
+
+/* Login page: one narrow panel with the fields stacked. */
+.login {
+  max-width: 360px;
+  margin: calc(var(--space) * 6) auto;
+  padding: calc(var(--space) * 3);
+  background: var(--surface);
+  border: var(--border);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space) * 2);
+}
+
 /* Wide tables (e.g. with ULIDs) scroll sideways instead of being cut off. */
 main {
   padding: calc(var(--space) * 3);

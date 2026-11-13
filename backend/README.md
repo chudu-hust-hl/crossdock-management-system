@@ -59,5 +59,13 @@ Each integration test file uses its own database (`cross_dock_management_test_<n
 | `PRICING_BASE_FEE` | `20000` | Booking cost: fixed fee per shipment, in VND |
 | `PRICING_FEE_PER_ITEM` | `5000` | Booking cost: fee per item, in VND |
 | `PRICING_FEE_PER_KG` | `3000` | Booking cost: fee per kg of total weight, in VND |
+| `JWT_SECRET` | a long random value | Signs the login tokens (required) |
+| `AUTH_SEED_EMAIL` | `admin@example.com` | Email of the first `SYS_ADMIN` |
+| `AUTH_SEED_PASSWORD` | at least 8 characters | Password of the first `SYS_ADMIN` |
+| `AUTH_SEED_NAME` | `System Admin` | Full name of the first `SYS_ADMIN` |
 
 The three `PRICING_*` variables are set together or not at all; the values above are examples, not an agreed tariff. Without them the app starts, but `POST /shipments/book` answers `503`. The formula is in [`../docs/business-workflows.md` §4.3](../docs/business-workflows.md#43-cost).
+
+Without `JWT_SECRET` the app does not start. Generate one with `node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"`.
+
+When no `SYS_ADMIN` exists and the three `AUTH_SEED_*` variables are set, the app creates that user at startup. Otherwise it logs a warning and starts anyway. Log in with `POST /auth/login`, then use the token with Swagger's Authorize button. The writes need it; see [`../docs/domain-model.md` §4.2](../docs/domain-model.md#42-user).

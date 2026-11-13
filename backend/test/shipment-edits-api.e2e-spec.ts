@@ -1,11 +1,12 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { Test } from '@nestjs/testing';
+import { Test, TestingModule } from '@nestjs/testing';
 import { Model, Types } from 'mongoose';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { generateUlid } from '../src/common/utils/ulid.util';
 import { validationPipeOptions } from '../src/config/validation.config';
+import { AuthModule } from '../src/modules/auth/auth.module';
 import { Item } from '../src/modules/items/schemas/item.schema';
 import { LocationType } from '../src/modules/locations/enums/location-type.enum';
 import { Location } from '../src/modules/locations/schemas/location.schema';
@@ -18,6 +19,8 @@ import { ShipmentPageResponse } from '../src/modules/shipments/dto/shipment-summ
 import { ShipmentViewResponse } from '../src/modules/shipments/dto/shipment-view-response.dto';
 import { Shipment } from '../src/modules/shipments/schemas/shipment.schema';
 import { ShipmentsModule } from '../src/modules/shipments/shipments.module';
+import { UserRole } from '../src/modules/users/enums/user-role.enum';
+import { bearer, tokenFor } from './utils/test-auth';
 import { testDatabaseImports } from './utils/test-database';
 
 // Integration test: requires MongoDB at MONGODB_URI. Uses its own database,
@@ -97,10 +100,16 @@ describe('Shipment summary, view and edits API (integration)', () => {
   let models: Model<unknown>[];
   let hanoiDockId: string;
   let hcmcDockId: string;
+  let moduleRef: TestingModule;
+  let adminToken: string;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [...testDatabaseImports(TEST_DB_NAME), ShipmentsModule],
+    moduleRef = await Test.createTestingModule({
+      imports: [
+        ...testDatabaseImports(TEST_DB_NAME),
+        AuthModule,
+        ShipmentsModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -117,6 +126,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       (model) => moduleRef.get<Model<unknown>>(getModelToken(model.name)),
     );
     await Promise.all(models.map((model) => model.init()));
+    adminToken = await tokenFor(moduleRef, UserRole.ADMIN);
   });
 
   beforeEach(async () => {
@@ -159,12 +169,19 @@ describe('Shipment summary, view and edits API (integration)', () => {
   });
 
   const http = () => request(app.getHttpServer());
+  /** The booking writes need an ADMIN (or SYS_ADMIN) token. */
+  const asAdmin = () => ({
+    post: (url: string) =>
+      http().post(url).set('Authorization', bearer(adminToken)),
+    put: (url: string) =>
+      http().put(url).set('Authorization', bearer(adminToken)),
+  });
 
   async function book(
     barcodePrefix: string,
     routed = true,
   ): Promise<ShipmentResponse> {
-    const response = await http()
+    const response = await asAdmin()
       .post('/shipments/book')
       .send(booking(barcodePrefix, routed))
       .expect(201);
@@ -344,7 +361,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
     it("changes only the booking's customer name", async () => {
       const routed = await book('R');
 
-      const response = await http()
+      const response = await asAdmin()
         .put(`/shipments/${routed.id}`)
         .send({ customerName: '  Cong ty XYZ ' })
         .expect(200);
@@ -360,23 +377,49 @@ describe('Shipment summary, view and edits API (integration)', () => {
     it('rejects a blank name, a child id, and a booking that is not CREATED', async () => {
       const routed = await book('R');
 
-      await http()
+      await asAdmin()
         .put(`/shipments/${routed.id}`)
         .send({ customerName: ' ' })
         .expect(400);
-      await http()
+      await asAdmin()
         .put(`/shipments/${routed.childrenIds[0]}`)
         .send({ customerName: 'X' })
         .expect(404);
 
       await setStatus(routed.id, 'IN_TRANSIT');
-      const conflict = await http()
+      const conflict = await asAdmin()
         .put(`/shipments/${routed.id}`)
         .send({ customerName: 'X' })
         .expect(409);
       expect((conflict.body as { message: string }).message).toBe(
         `Booking ${routed.code} is IN_TRANSIT; the booking can no longer be edited`,
       );
+    });
+
+    it('needs a token of a SYS_ADMIN or ADMIN: 401 without one, 403 for a dock role', async () => {
+      const routed = await book('R');
+      const operatorToken = await tokenFor(moduleRef, UserRole.DOCK_OPERATOR);
+      const sysAdminToken = await tokenFor(moduleRef, UserRole.SYS_ADMIN);
+
+      await http()
+        .put(`/shipments/${routed.id}`)
+        .send({ customerName: 'X' })
+        .expect(401);
+      const forbidden = await http()
+        .put(`/shipments/${routed.id}`)
+        .set('Authorization', bearer(operatorToken))
+        .send({ customerName: 'X' })
+        .expect(403);
+      expect((forbidden.body as { message: string }).message).toBe(
+        'Requires one of the roles: SYS_ADMIN, ADMIN',
+      );
+      await http()
+        .put(`/shipments/${routed.id}`)
+        .set('Authorization', bearer(sysAdminToken))
+        .send({ customerName: 'Cong ty SYS' })
+        .expect(200);
+
+      expect((await view(routed.id)).shipment.customerName).toBe('Cong ty SYS');
     });
   });
 
@@ -394,7 +437,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const routed = await book('R');
       const before = await routesOf(await view(routed.id));
 
-      const response = await http()
+      const response = await asAdmin()
         .put(`/shipments/${routed.id}/appointments`)
         .send({ pickup, dropoff })
         .expect(200);
@@ -446,7 +489,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const { trunkRoute: before } = await routesOf(await view(routed.id));
 
       const body = (
-        await http()
+        await asAdmin()
           .put(`/shipments/${routed.id}/appointments`)
           .send({ pickup, dropoff })
           .expect(200)
@@ -467,7 +510,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const direct = await book('U', false);
 
       const body = (
-        await http()
+        await asAdmin()
           .put(`/shipments/${direct.id}/appointments`)
           .send({ pickup, dropoff })
           .expect(200)
@@ -495,7 +538,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
     ])('rejects %s with 400', async (_case, body, message) => {
       const routed = await book('R');
 
-      const response = await http()
+      const response = await asAdmin()
         .put(`/shipments/${routed.id}/appointments`)
         .send(body)
         .expect(400);
@@ -510,7 +553,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const routed = await book('R');
       await setStatus(routed.id, 'CANCELLED');
 
-      await http()
+      await asAdmin()
         .put(`/shipments/${routed.id}/appointments`)
         .send({ pickup, dropoff })
         .expect(409);
@@ -527,7 +570,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const routed = await book('R');
       const itemId = routed.itemIds[1];
 
-      const response = await http()
+      const response = await asAdmin()
         .put(`/shipments/${routed.id}/items/${itemId}`)
         .send({
           description: 'Pallet of paper',
@@ -576,7 +619,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const itemId = routed.itemIds[0];
 
       const body = (
-        await http()
+        await asAdmin()
           .put(`/shipments/${routed.id}/items/${itemId}`)
           .send({ description: null, itemUnit: 'BAG' })
           .expect(200)
@@ -599,7 +642,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const routed = await book('R');
       const other = await book('O', false);
 
-      const response = await http()
+      const response = await asAdmin()
         .put(`/shipments/${routed.id}/items/${other.itemIds[0]}`)
         .send({ weight: 5, weightUnit: 'KG' })
         .expect(404);
@@ -621,7 +664,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
     ])('rejects %s with 400', async (_case, body, message) => {
       const routed = await book('R');
 
-      const response = await http()
+      const response = await asAdmin()
         .put(`/shipments/${routed.id}/items/${routed.itemIds[0]}`)
         .send(body)
         .expect(400);
@@ -635,7 +678,7 @@ describe('Shipment summary, view and edits API (integration)', () => {
       const routed = await book('R');
       await setStatus(routed.id, 'AT_DOCK');
 
-      await http()
+      await asAdmin()
         .put(`/shipments/${routed.id}/items/${routed.itemIds[0]}`)
         .send({ weight: 9, weightUnit: 'KG' })
         .expect(409);

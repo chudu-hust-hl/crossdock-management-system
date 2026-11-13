@@ -1,6 +1,7 @@
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import configuration, { AppConfig } from '../../src/config/configuration';
+import { useTestJwtSecret } from './test-auth';
 
 /**
  * Imports for an integration test that connects to MONGODB_URI but uses its own
@@ -8,6 +9,7 @@ import configuration, { AppConfig } from '../../src/config/configuration';
  * parallel and each file drops its database when it finishes.
  */
 export function testDatabaseImports(dbName: string) {
+  useTestJwtSecret();
   return [
     ConfigModule.forRoot({ isGlobal: true, load: [configuration] }),
     MongooseModule.forRootAsync({

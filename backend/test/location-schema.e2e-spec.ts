@@ -2,6 +2,7 @@ import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Connection, Model, Types } from 'mongoose';
 import { isValidUlid } from '../src/common/utils/ulid.util';
+import { AuthModule } from '../src/modules/auth/auth.module';
 import { LocationType } from '../src/modules/locations/enums/location-type.enum';
 import { LocationsModule } from '../src/modules/locations/locations.module';
 import { Location } from '../src/modules/locations/schemas/location.schema';
@@ -26,7 +27,11 @@ describe('Location schema (integration)', () => {
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [...testDatabaseImports(TEST_DB_NAME), LocationsModule],
+      imports: [
+        ...testDatabaseImports(TEST_DB_NAME),
+        AuthModule,
+        LocationsModule,
+      ],
     }).compile();
 
     connection = moduleRef.get<Connection>(getConnectionToken());

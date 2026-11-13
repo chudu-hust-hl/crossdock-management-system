@@ -7,18 +7,25 @@ import {
   Post,
   Query,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto';
 import { UlidParamDto } from '../../common/dto/ulid-param.dto';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 import { CreateLocationDto } from './dto/create-location.dto';
 import { ListLocationsQueryDto } from './dto/list-locations-query.dto';
 import {
@@ -54,6 +61,17 @@ export class LocationsController {
     type: ErrorResponseDto,
     description: 'Invalid body, e.g. a STORE without `contactName`.',
   })
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    type: ErrorResponseDto,
+    description: 'Missing or invalid token, or the user is no longer ACTIVE.',
+  })
+  @ApiForbiddenResponse({
+    type: ErrorResponseDto,
+    description: 'The caller is not a SYS_ADMIN.',
+  })
+  @UseGuards(AuthGuard)
+  @Roles(UserRole.SYS_ADMIN)
   async create(
     @Body() dto: CreateLocationDto,
     @Res({ passthrough: true }) response: Response,

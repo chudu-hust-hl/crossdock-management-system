@@ -6,6 +6,7 @@ import {
   AppointmentsUpdate,
   ItemUpdate,
   Location,
+  LoginResponse,
   Page,
   Shipment,
   ShipmentSummary,
@@ -20,6 +21,10 @@ export type ListQuery = Record<string, string | number | undefined>;
 export class ApiService {
   private readonly http = inject(HttpClient);
   private readonly baseUrl = environment.apiBaseUrl;
+
+  login(email: string, password: string): Observable<LoginResponse> {
+    return this.http.post<LoginResponse>(`${this.baseUrl}/auth/login`, { email, password });
+  }
 
   getLocations(query: ListQuery): Observable<Page<Location>> {
     return this.http.get<Page<Location>>(`${this.baseUrl}/locations`, {

@@ -1,9 +1,15 @@
 <header class="app-header">
   <strong>Cross-dock management</strong>
-  <nav>
-    <a routerLink="/shipments" routerLinkActive="active">Shipments</a>
-    <a routerLink="/locations" routerLinkActive="active">Locations</a>
-  </nav>
+  @if (session.user(); as user) {
+    <nav>
+      <a routerLink="/shipments" routerLinkActive="active">Shipments</a>
+      <a routerLink="/locations" routerLinkActive="active">Locations</a>
+    </nav>
+    <div class="session">
+      <span>{{ user.fullName }} ({{ user.roles.join(', ') }})</span>
+      <button type="button" (click)="session.logout()">Log out</button>
+    </div>
+  }
 </header>
 <main>
   <router-outlet />

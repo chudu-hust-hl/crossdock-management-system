@@ -1,12 +1,17 @@
 import { INestApplication } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
 import { HealthController } from '../health/health.controller';
+import { AuthController } from '../modules/auth/auth.controller';
+import { AuthService } from '../modules/auth/auth.service';
 import { LocationsController } from '../modules/locations/locations.controller';
 import { LocationsService } from '../modules/locations/locations.service';
 import { ShipmentEditsService } from '../modules/shipments/shipment-edits.service';
 import { ShipmentsController } from '../modules/shipments/shipments.controller';
 import { ShipmentsService } from '../modules/shipments/shipments.service';
+import { UsersController } from '../modules/users/users.controller';
+import { UsersService } from '../modules/users/users.service';
 import { createSwaggerDocument } from './swagger.config';
 
 describe('Swagger document', () => {
@@ -18,8 +23,17 @@ describe('Swagger document', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      controllers: [HealthController, LocationsController, ShipmentsController],
+      controllers: [
+        HealthController,
+        AuthController,
+        LocationsController,
+        ShipmentsController,
+        UsersController,
+      ],
       providers: [
+        { provide: AuthService, useValue: {} },
+        { provide: UsersService, useValue: {} },
+        { provide: JwtService, useValue: {} },
         { provide: LocationsService, useValue: {} },
         { provide: ShipmentsService, useValue: {} },
         { provide: ShipmentEditsService, useValue: {} },
@@ -36,6 +50,7 @@ describe('Swagger document', () => {
 
   it('documents every endpoint', () => {
     expect(Object.keys(document.paths).sort()).toEqual([
+      '/auth/login',
       '/health',
       '/locations',
       '/locations/{id}',
@@ -45,8 +60,12 @@ describe('Swagger document', () => {
       '/shipments/{id}/appointments',
       '/shipments/{id}/items/{itemId}',
       '/shipments/{id}/view',
+      '/users',
+      '/users/{id}',
     ]);
     expect(Object.keys(document.paths['/locations'])).toEqual(['post', 'get']);
+    expect(Object.keys(document.paths['/users'])).toEqual(['post', 'get']);
+    expect(Object.keys(document.paths['/users/{id}'])).toEqual(['get', 'put']);
     expect(Object.keys(document.paths['/shipments'])).toEqual(['get']);
     expect(Object.keys(document.paths['/shipments/{id}'])).toEqual([
       'get',
@@ -73,11 +92,20 @@ describe('Swagger document', () => {
       '404',
     ]);
     for (const path of ['/shipments/{id}', '/shipments/{id}/appointments']) {
-      expect(responses(path, 'put')).toEqual(['200', '400', '404', '409']);
+      expect(responses(path, 'put')).toEqual([
+        '200',
+        '400',
+        '401',
+        '403',
+        '404',
+        '409',
+      ]);
     }
     expect(responses('/shipments/{id}/items/{itemId}', 'put')).toEqual([
       '200',
       '400',
+      '401',
+      '403',
       '404',
       '409',
       '503',
@@ -143,15 +171,153 @@ describe('Swagger document', () => {
     ]);
   });
 
+  const operations = () =>
+    Object.entries(document.paths).flatMap(([path, item]) =>
+      (['get', 'post', 'put'] as const)
+        .filter((method) => item[method])
+        .map((method) => ({
+          route: `${method.toUpperCase()} ${path}`,
+          operation: item[method]!,
+        })),
+    );
+
+  it('declares the bearer scheme and marks exactly the protected writes with it', () => {
+    expect(document.components!.securitySchemes).toEqual({
+      bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+    });
+
+    const secured = operations()
+      .filter(({ operation }) => operation.security?.length)
+      .map(({ route }) => route)
+      .sort();
+    expect(secured).toEqual([
+      'GET /users',
+      'GET /users/{id}',
+      'POST /locations',
+      'POST /shipments/book',
+      'POST /users',
+      'PUT /shipments/{id}',
+      'PUT /shipments/{id}/appointments',
+      'PUT /shipments/{id}/items/{itemId}',
+      'PUT /users/{id}',
+    ]);
+    // POST /auth/login also answers 401 (wrong credentials), but never 403.
+    for (const { route, operation } of operations()) {
+      const statuses = Object.keys(operation.responses);
+      if (secured.includes(route)) {
+        expect([route, operation.security]).toEqual([route, [{ bearer: [] }]]);
+        expect([route, statuses]).toEqual([
+          route,
+          expect.arrayContaining(['401', '403']),
+        ]);
+      } else {
+        expect([route, statuses.includes('403')]).toEqual([route, false]);
+      }
+    }
+  });
+
+  it('documents login and the user endpoints', () => {
+    const responses = (path: string, method: 'get' | 'post' | 'put') =>
+      Object.keys(document.paths[path][method]!.responses).sort();
+
+    expect(responses('/auth/login', 'post')).toEqual(['200', '400', '401']);
+    expect(responses('/users', 'post')).toEqual([
+      '201',
+      '400',
+      '401',
+      '403',
+      '409',
+    ]);
+    expect(responses('/users', 'get')).toEqual(['200', '400', '401', '403']);
+    expect(responses('/users/{id}', 'get')).toEqual([
+      '200',
+      '400',
+      '401',
+      '403',
+      '404',
+    ]);
+    expect(responses('/users/{id}', 'put')).toEqual([
+      '200',
+      '400',
+      '401',
+      '403',
+      '404',
+      '409',
+    ]);
+    expect(document.paths['/users/{id}'].put!.parameters).toEqual([
+      expect.objectContaining({ name: 'id', in: 'path', required: true }),
+    ]);
+
+    expect(schema('LoginDto').required).toEqual(['email', 'password']);
+    expect(schema('LoginResponse').required).toEqual([
+      'accessToken',
+      'tokenType',
+      'expiresIn',
+      'user',
+    ]);
+    expect(schema('CreateUserDto').required).toEqual([
+      'fullName',
+      'email',
+      'password',
+      'roles',
+    ]);
+    expect(schema('UpdateUserDto').required).toBeUndefined();
+    expect(Object.keys(schema('UserResponse').properties!)).toEqual([
+      'id',
+      'fullName',
+      'email',
+      'roles',
+      'status',
+      'lastLoginAt',
+      'createdAt',
+      'updatedAt',
+    ]);
+    expect(schema('UserRole').enum).toEqual([
+      'SYS_ADMIN',
+      'ADMIN',
+      'DOCK_MANAGER',
+      'DOCK_OPERATOR',
+    ]);
+    expect(schema('UserPageResponse').required).toEqual([
+      'page',
+      'limit',
+      'total',
+      'items',
+    ]);
+    const query = document.paths['/users'].get!.parameters as {
+      name: string;
+    }[];
+    expect(query.map((parameter) => parameter.name)).toEqual([
+      'page',
+      'limit',
+      'email',
+      'status',
+      'sortBy',
+      'sortOrder',
+    ]);
+    expect(schema('UserSortField').enum).toEqual([
+      'fullName',
+      'email',
+      'createdAt',
+      'updatedAt',
+    ]);
+  });
+
   it('documents both POST /locations outcomes and the error responses', () => {
     const responses = document.paths['/locations'].post!.responses;
-    expect(Object.keys(responses).sort()).toEqual(['200', '201', '400']);
+    expect(Object.keys(responses).sort()).toEqual([
+      '200',
+      '201',
+      '400',
+      '401',
+      '403',
+    ]);
     expect(
       Object.keys(document.paths['/locations/{id}'].get!.responses).sort(),
     ).toEqual(['200', '400', '404']);
     expect(
       Object.keys(document.paths['/shipments/book'].post!.responses).sort(),
-    ).toEqual(['201', '400', '409', '503']);
+    ).toEqual(['201', '400', '401', '403', '409', '503']);
   });
 
   it('documents the list and detail responses of both modules', () => {

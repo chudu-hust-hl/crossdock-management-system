@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Connection, Model } from 'mongoose';
 import { DeliveryPointType } from '../src/common/enums/delivery-point-type.enum';
 import { generateUlid, isValidUlid } from '../src/common/utils/ulid.util';
+import { AuthModule } from '../src/modules/auth/auth.module';
 import { DockTasksModule } from '../src/modules/dock-tasks/dock-tasks.module';
 import { DockTaskType } from '../src/modules/dock-tasks/enums/dock-task-type.enum';
 import { DockTask } from '../src/modules/dock-tasks/schemas/dock-task.schema';
@@ -38,6 +39,7 @@ describe('Domain schemas (integration)', () => {
     moduleRef = await Test.createTestingModule({
       imports: [
         ...testDatabaseImports(TEST_DB_NAME),
+        AuthModule,
         LocationsModule,
         UsersModule,
         ItemsModule,

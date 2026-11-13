@@ -6,6 +6,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { generateUlid } from '../src/common/utils/ulid.util';
 import { validationPipeOptions } from '../src/config/validation.config';
+import { AuthModule } from '../src/modules/auth/auth.module';
 import { Item } from '../src/modules/items/schemas/item.schema';
 import { Location } from '../src/modules/locations/schemas/location.schema';
 import { Metadata } from '../src/modules/metadata/schemas/metadata.schema';
@@ -13,6 +14,8 @@ import { ShipmentResponse } from '../src/modules/shipments/dto/shipment-response
 import { ShipmentPageResponse } from '../src/modules/shipments/dto/shipment-summary-response.dto';
 import { Shipment } from '../src/modules/shipments/schemas/shipment.schema';
 import { ShipmentsModule } from '../src/modules/shipments/shipments.module';
+import { UserRole } from '../src/modules/users/enums/user-role.enum';
+import { bearer, tokenFor } from './utils/test-auth';
 import { testDatabaseImports } from './utils/test-database';
 
 // Integration test: requires MongoDB at MONGODB_URI. Uses its own database,
@@ -51,10 +54,15 @@ describe('Shipments read API (integration)', () => {
   let models: Model<unknown>[];
   let rootId: string;
   let deletedId: string;
+  let adminToken: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      imports: [...testDatabaseImports(TEST_DB_NAME), ShipmentsModule],
+      imports: [
+        ...testDatabaseImports(TEST_DB_NAME),
+        AuthModule,
+        ShipmentsModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -67,6 +75,7 @@ describe('Shipments read API (integration)', () => {
       moduleRef.get<Model<unknown>>(getModelToken(model.name)),
     );
     await Promise.all(models.map((model) => model.init()));
+    adminToken = await tokenFor(moduleRef, UserRole.ADMIN);
   });
 
   /** Creates a Shipment with a fixed `createdAt`, so that sorting by it is predictable. */
@@ -296,6 +305,7 @@ describe('Shipments read API (integration)', () => {
     it('returns a booked shipment exactly as the booking returned it', async () => {
       const booked = await request(app.getHttpServer())
         .post('/shipments/book')
+        .set('Authorization', bearer(adminToken))
         .send({
           customerName: 'Cong ty Booking',
           pickup: {

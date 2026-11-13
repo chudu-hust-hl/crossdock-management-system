@@ -18,6 +18,7 @@ Instructions for every AI agent working in this repository. Read this file first
 | Domain model, collections, identifiers, naming and time conventions | `docs/domain-model.md` |
 | Field-level Mongoose schema design (types, defaults, indexes, validation) | `docs/schema-design.md` |
 | Business workflows: Location sources and reuse, shipment creation, routing | `docs/business-workflows.md` |
+| Scanning, dock tasks, and how Item, Route, and Shipment status change | `docs/scanning-flows.md` |
 | Module structure, layer responsibilities, roadmap | `docs/architecture.md` |
 
 `.cursor/rules/` contains short summaries of these documents. If a rule and a document disagree, the document wins; point out the inconsistency.

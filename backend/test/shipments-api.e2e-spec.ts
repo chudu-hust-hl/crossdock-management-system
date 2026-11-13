@@ -8,6 +8,7 @@ import { App } from 'supertest/types';
 import { businessCodePeriod } from '../src/common/utils/business-code.util';
 import { generateUlid, isValidUlid } from '../src/common/utils/ulid.util';
 import { validationPipeOptions } from '../src/config/validation.config';
+import { AuthModule } from '../src/modules/auth/auth.module';
 import { ItemsService } from '../src/modules/items/items.service';
 import { Item } from '../src/modules/items/schemas/item.schema';
 import { LocationStatus } from '../src/modules/locations/enums/location-status.enum';
@@ -26,6 +27,8 @@ import { Province } from '../src/modules/routing/schemas/province.schema';
 import { ShipmentResponse } from '../src/modules/shipments/dto/shipment-response.dto';
 import { Shipment } from '../src/modules/shipments/schemas/shipment.schema';
 import { ShipmentsModule } from '../src/modules/shipments/shipments.module';
+import { UserRole } from '../src/modules/users/enums/user-role.enum';
+import { bearer, tokenFor } from './utils/test-auth';
 import { testDatabaseImports } from './utils/test-database';
 
 // Integration test: requires MongoDB at MONGODB_URI. Uses its own database,
@@ -98,10 +101,15 @@ describe('Shipments API (integration)', () => {
   let routeModel: Model<Route>;
   let itemsService: ItemsService;
   let configService: ConfigService;
+  let adminToken: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      imports: [...testDatabaseImports(TEST_DB_NAME), ShipmentsModule],
+      imports: [
+        ...testDatabaseImports(TEST_DB_NAME),
+        AuthModule,
+        ShipmentsModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -117,6 +125,7 @@ describe('Shipments API (integration)', () => {
     routeModel = moduleRef.get(getModelToken(Route.name));
     itemsService = moduleRef.get(ItemsService);
     configService = moduleRef.get(ConfigService);
+    adminToken = await tokenFor(moduleRef, UserRole.ADMIN);
     await Promise.all(
       [
         shipmentModel,
@@ -150,7 +159,10 @@ describe('Shipments API (integration)', () => {
   });
 
   function post(body: object) {
-    return request(app.getHttpServer()).post('/shipments/book').send(body);
+    return request(app.getHttpServer())
+      .post('/shipments/book')
+      .set('Authorization', bearer(adminToken))
+      .send(body);
   }
 
   async function counts() {

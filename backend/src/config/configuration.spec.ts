@@ -6,14 +6,66 @@ const PRICING_VARIABLES = [
   'PRICING_FEE_PER_KG',
 ];
 
+const AUTH_SEED_VARIABLES = [
+  'AUTH_SEED_EMAIL',
+  'AUTH_SEED_PASSWORD',
+  'AUTH_SEED_NAME',
+];
+
 describe('configuration', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
-    process.env = { ...originalEnv, MONGODB_URI: 'mongodb://localhost/test' };
-    for (const name of PRICING_VARIABLES) {
+    process.env = {
+      ...originalEnv,
+      MONGODB_URI: 'mongodb://localhost/test',
+      JWT_SECRET: 'unit-test-secret',
+    };
+    for (const name of [...PRICING_VARIABLES, ...AUTH_SEED_VARIABLES]) {
       delete process.env[name];
     }
+  });
+
+  it.each([undefined, '', '   '])(
+    'fails at startup, naming JWT_SECRET, when it is %j',
+    (value) => {
+      if (value === undefined) {
+        delete process.env.JWT_SECRET;
+      } else {
+        process.env.JWT_SECRET = value;
+      }
+
+      expect(() => configuration()).toThrow('JWT_SECRET is not set');
+    },
+  );
+
+  it('reads JWT_SECRET', () => {
+    expect(configuration().jwtSecret).toBe('unit-test-secret');
+  });
+
+  it('has no seed user unless all three AUTH_SEED_* variables are set', () => {
+    expect(configuration().authSeed).toBeNull();
+
+    process.env.AUTH_SEED_EMAIL = 'root@example.com';
+    process.env.AUTH_SEED_PASSWORD = 'seed password';
+    expect(configuration().authSeed).toBeNull();
+
+    process.env.AUTH_SEED_NAME = ' Root Admin ';
+    expect(configuration().authSeed).toEqual({
+      email: 'root@example.com',
+      password: 'seed password',
+      fullName: 'Root Admin',
+    });
+  });
+
+  it('fails at startup when the seed password is shorter than 8 characters', () => {
+    process.env.AUTH_SEED_EMAIL = 'root@example.com';
+    process.env.AUTH_SEED_PASSWORD = 'short';
+    process.env.AUTH_SEED_NAME = 'Root Admin';
+
+    expect(() => configuration()).toThrow(
+      'AUTH_SEED_PASSWORD must have at least 8 characters.',
+    );
   });
 
   afterAll(() => {

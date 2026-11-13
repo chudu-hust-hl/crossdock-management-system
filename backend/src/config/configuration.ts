@@ -1,8 +1,17 @@
+import { MIN_PASSWORD_LENGTH } from '../modules/users/users.constants';
+
 /** Rates of the shipment cost formula (see `ShipmentCostService`), in VND. */
 export interface PricingConfig {
   baseFee: number;
   feePerItem: number;
   feePerKg: number;
+}
+
+/** The first SYS_ADMIN, created at startup when no SYS_ADMIN exists. */
+export interface AuthSeedConfig {
+  email: string;
+  password: string;
+  fullName: string;
 }
 
 export interface AppConfig {
@@ -13,6 +22,10 @@ export interface AppConfig {
   corsOrigin: string;
   /** `null` when no PRICING_* variable is set; shipments cannot be booked then. */
   pricing: PricingConfig | null;
+  /** Signs and verifies the login tokens. */
+  jwtSecret: string;
+  /** `null` unless all three AUTH_SEED_* variables are set. */
+  authSeed: AuthSeedConfig | null;
 }
 
 const PRICING_VARIABLES = {
@@ -21,11 +34,24 @@ const PRICING_VARIABLES = {
   feePerKg: 'PRICING_FEE_PER_KG',
 } as const;
 
+export const AUTH_SEED_VARIABLES = {
+  email: 'AUTH_SEED_EMAIL',
+  password: 'AUTH_SEED_PASSWORD',
+  fullName: 'AUTH_SEED_NAME',
+} as const;
+
 export default function configuration(): AppConfig {
   const mongodbUri = process.env.MONGODB_URI;
   if (!mongodbUri) {
     throw new Error(
       'MONGODB_URI is not set. Copy backend/.env.example to backend/.env or set the variable in the environment.',
+    );
+  }
+
+  const jwtSecret = process.env.JWT_SECRET?.trim();
+  if (!jwtSecret) {
+    throw new Error(
+      'JWT_SECRET is not set. Set it in backend/.env or in the environment to a long random value.',
     );
   }
 
@@ -42,7 +68,24 @@ export default function configuration(): AppConfig {
     mongodbUri,
     corsOrigin: process.env.CORS_ORIGIN?.trim() || 'http://localhost:4200',
     pricing: pricingConfiguration(),
+    jwtSecret,
+    authSeed: authSeedConfiguration(),
   };
+}
+
+function authSeedConfiguration(): AuthSeedConfig | null {
+  const email = process.env[AUTH_SEED_VARIABLES.email]?.trim();
+  const password = process.env[AUTH_SEED_VARIABLES.password];
+  const fullName = process.env[AUTH_SEED_VARIABLES.fullName]?.trim();
+  if (!email || !password || !fullName) {
+    return null;
+  }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(
+      `${AUTH_SEED_VARIABLES.password} must have at least ${MIN_PASSWORD_LENGTH} characters.`,
+    );
+  }
+  return { email, password, fullName };
 }
 
 /**

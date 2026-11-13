@@ -10,9 +10,11 @@ Why:
 
 - Simple to run, debug, and explain for a graduation project.
 - Module boundaries keep the code organised and leave room to extract services later if a real need appears.
-- No network calls, message brokers, or distributed transactions between modules.
+- Modules call each other in-process. They do not use the network or a distributed transaction. The scanning broker below is the one exception.
 
-Not in the initial design: microservices, message brokers (e.g. RabbitMQ), caches (e.g. Redis), cloud SDKs, hardware/RFID/IoT integrations, AI/ML.
+Not in the initial design: microservices, caches (e.g. Redis), cloud SDKs, hardware/RFID/IoT integrations, AI/ML.
+
+Scanning is the one approved use of a message broker. Queue names, events, and the status rules are in [`scanning-flows.md`](./scanning-flows.md). That flow is agreed and not implemented. Booking, routing, and the read APIs do not publish or consume messages.
 
 ## 2. Project structure
 
@@ -63,8 +65,9 @@ backend/src/
 ├── health/
 │   └── health.controller.ts    # GET /health (API process only)
 └── modules/
+    ├── auth/                   # POST /auth/login, the JWT config, AuthGuard, @Roles(), @CurrentUser()
     ├── locations/
-    ├── users/
+    ├── users/                  # user management by SYS_ADMIN (/users), startup seed of the first SYS_ADMIN
     ├── items/                  # Item schema, CreateItemDto, UpdateItemDto, ItemsService (used by booking)
     ├── shipments/              # booking (POST /shipments/book), list, detail, view; ShipmentCostService;
     │                           #   ShipmentEditsService (the three booking-correction PUTs)
@@ -90,7 +93,7 @@ Controllers, services, and DTOs are created when a feature needs them, not as em
 
 ## 3. Modules
 
-One NestJS feature module per domain collection. `RoutingModule` is the booking routing rule: it does not own a domain collection.
+One NestJS feature module per domain collection. `RoutingModule` is the booking routing rule, and `AuthModule` is login; neither owns a domain collection.
 
 | Module | Collection |
 | --- | --- |
@@ -102,6 +105,7 @@ One NestJS feature module per domain collection. `RoutingModule` is the booking 
 | `DockTasksModule` | `dock_tasks` |
 | `MetadataModule` | `metadata` (supporting collection: counters and changeable rules) |
 | `RoutingModule` | no domain collection of its own. Reads the existing `provinces` reference data and updates a booked shipment's `deliveryInfos` |
+| `AuthModule` | no domain collection of its own. `POST /auth/login`; registers `JwtModule` once, as global, so `AuthGuard` can verify tokens anywhere |
 
 Guidelines:
 
@@ -142,15 +146,25 @@ Guidelines:
 - Controllers return plain response objects built by a mapping function, e.g. `toLocationResponse()`. They never return Mongoose documents, so `_id`, `__v`, and `deletedAt` don't leak.
 - Errors use Nest's built-in HTTP exceptions with the default body:
   - `400` for validation errors
+  - `401` (`UnauthorizedException`) for a failed login, or a protected endpoint called without a valid token
+  - `403` (`ForbiddenException`) for a valid token without an allowed role
   - `404` (`NotFoundException`) for an unknown or soft-deleted ULID (`GET /<resource>/:id`)
   - `409` (`ConflictException`) for a unique value that is already taken, e.g. an item barcode
   - `503` (`ServiceUnavailableException`) when required configuration is missing, e.g. booking pricing
 - Services handle MongoDB duplicate-key errors (`11000`) where they are expected, with `isDuplicateKeyError()` (`common/utils/mongo-error.util.ts`). Examples are the store find-or-create in `LocationsService` and the booking in `ShipmentsService`.
-- API integration tests (`test/<feature>-api.e2e-spec.ts`) boot only the feature module against their own test database and register the global pipe with `validationPipeOptions`.
+- API integration tests (`test/<feature>-api.e2e-spec.ts`) boot only the feature module against their own test database and register the global pipe with `validationPipeOptions`. A module with a protected endpoint also needs `AuthModule`. `tokenFor(moduleRef, ...roles)` (`test/utils/test-auth.ts`) creates a user with those roles and signs a token for it.
+
+### Protected endpoints
+
+- `AuthGuard` (`modules/auth/auth.guard.ts`) reads `Authorization: Bearer`, verifies the token, and loads the user. It answers `401` unless the user is `ACTIVE` and not deleted. It then sets the request user to `{ id, roles }` with the roles from the database.
+- `@Roles(...)` lists the roles that may call a handler; any one of the caller's roles is enough, otherwise `403`.
+- Both are applied per handler with `@UseGuards(AuthGuard)` (or on the whole `UsersController`). Only the writes in [`domain-model.md` §4.2](./domain-model.md#42-user) have them; everything else is public.
+- A module whose controller uses the guard imports `UsersModule`, because the guard needs `UsersService`. `JwtService` comes from the global `JwtModule` that `AuthModule` registers.
+- `@CurrentUser()` gives a handler the caller, e.g. to stop a `SYS_ADMIN` from locking themselves.
 
 ### Lists: filtering, sorting and pagination
 
-`GET /locations` and `GET /shipments` work the same way:
+`GET /locations`, `GET /shipments` and `GET /users` work the same way:
 
 - **Query DTO:** `List<Feature>QueryDto` extends `PaginationQueryDto` (`common/dto/`) and adds the module's filters, plus `sortBy` and `sortOrder`. Like every DTO it is validated by the global pipe. An invalid value or an unknown parameter is a `400`, never silently ignored.
 - **Paging:** `page` starts at 1 (default 1). `limit` is 1–100 (default 20).
@@ -172,11 +186,12 @@ The documentation is written with explicit `@nestjs/swagger` decorators, so it i
   - `@ApiTags('<feature>')` on the class.
   - On each handler, `@ApiOperation({ summary })` plus one response decorator per status it can return, e.g. `@ApiCreatedResponse`, `@ApiOkResponse`, `@ApiBadRequestResponse`, `@ApiNotFoundResponse`.
   - Error responses use `ErrorResponseDto` (`common/dto/`).
+  - A protected handler also has `@ApiBearerAuth()`, `@ApiUnauthorizedResponse` and `@ApiForbiddenResponse`. `swagger.config.ts` declares the `bearer` scheme, so Swagger UI has an Authorize button.
 - **DTOs:** every property gets `@ApiProperty()`, or `@ApiPropertyOptional()` when it is optional. Enums use `{ enum, enumName }`. Nested objects use `{ type: NestedDto }`.
 - **Response bodies** are classes, not interfaces, because Swagger can only describe classes. Example: `LocationResponse`.
 - `config/swagger.config.spec.ts` generates the document without a database. It checks that every endpoint, response status, parameter, and required field is documented. When a controller is added, add it to this test.
 
-Implemented DTOs: `CreateLocationDto`, `AddressDto`, `LocationCandidateDto`, `ListLocationsQueryDto`, and the `LocationResponse` / `LocationPageResponse` mappings (`locations/dto/`); `CreateShipmentDto`, `ShipmentEndpointDto`, `ListShipmentsQueryDto`, `UpdateShipmentCustomerDto`, `UpdateAppointmentsDto`, `ShipmentItemParamDto`, and `ShipmentResponse` / `BookShipmentResponse` / `ShipmentSummaryResponse` / `ShipmentPageResponse` / `ShipmentViewResponse` (`shipments/dto/`); `CreateItemDto`, `UpdateItemDto`, `DimensionsDto` and `ItemResponse` (`items/dto/`); `RouteResponse` (`routes/dto/`); `UlidParamDto`, `PaginationQueryDto`, `PageResponse`, and `TimeWindowDto` / `TimeWindowResponse` (`common/dto/`). See [`business-workflows.md`](./business-workflows.md) for the workflows they serve.
+Implemented DTOs: `CreateLocationDto`, `AddressDto`, `LocationCandidateDto`, `ListLocationsQueryDto`, and the `LocationResponse` / `LocationPageResponse` mappings (`locations/dto/`); `CreateShipmentDto`, `ShipmentEndpointDto`, `ListShipmentsQueryDto`, `UpdateShipmentCustomerDto`, `UpdateAppointmentsDto`, `ShipmentItemParamDto`, and `ShipmentResponse` / `BookShipmentResponse` / `ShipmentSummaryResponse` / `ShipmentPageResponse` / `ShipmentViewResponse` (`shipments/dto/`); `CreateItemDto`, `UpdateItemDto`, `DimensionsDto` and `ItemResponse` (`items/dto/`); `RouteResponse` (`routes/dto/`); `CreateUserDto`, `UpdateUserDto`, `ListUsersQueryDto`, and `UserResponse` / `UserPageResponse` (`users/dto/`); `LoginDto` and `LoginResponse` (`auth/dto/`); `UlidParamDto`, `PaginationQueryDto`, `PageResponse`, and `TimeWindowDto` / `TimeWindowResponse` (`common/dto/`). See [`business-workflows.md`](./business-workflows.md) for the workflows they serve.
 
 ## 5. Identifier strategy
 
@@ -196,6 +211,10 @@ See [`domain-model.md` §2](./domain-model.md#2-identifiers).
 - Local MongoDB runs with the root `docker-compose.yml` (`mongo:8.0`), exposed on `127.0.0.1:27018` (to avoid clashing with a local MongoDB on `27017`), with the named volume `cross-dock-management-mongodb-data`.
 - Default local URI: `mongodb://localhost:27018/cross_dock_management`.
 - A `GET /health` endpoint reports that the API process is running. It does not claim that MongoDB is healthy; a database health check may be added later.
+- Authentication is implemented: a JWT bearer token signed with `@nestjs/jwt` and passwords hashed with `bcryptjs`. There are no sessions, no refresh tokens, no Passport, and no public registration. Roles and the endpoint table are in [`domain-model.md` §4.2](./domain-model.md#42-user).
+  - `JWT_SECRET` is required. The app fails at startup with a message naming it when it is missing or empty.
+  - On startup, when no non-deleted `SYS_ADMIN` exists and `AUTH_SEED_EMAIL`, `AUTH_SEED_PASSWORD` and `AUTH_SEED_NAME` are all set, `UsersService` creates that user as an `ACTIVE` `SYS_ADMIN`. When they are not all set, the app starts and logs a warning. When a `SYS_ADMIN` exists, it does nothing.
+  - All four variables are documented in `backend/.env.example` without values and are never committed in `.env`.
 
 ## 7. Design before APIs
 
@@ -211,7 +230,7 @@ Schemas and relationships are designed deliberately, one entity at a time, befor
 6. Implement the Route schema. *(done)*
 7. Implement the DockTask schema. *(done)*
 8. Add DTO validation, services, APIs, and tests incrementally. *(in progress: validation setup, the Location service and API, shipment booking with items and cost (`POST /shipments/book`), routing of that shipment's delivery infos, list/detail endpoints for Locations and Shipments, the booking view, and the three booking-correction `PUT`s are done)*
-9. Add authentication and additional infrastructure only when needed.
+9. Add authentication (token login, user management by `SYS_ADMIN`, guards on the writes in [`domain-model.md` §4.2](./domain-model.md#42-user)). *(done, including the frontend login screen)* Scanning stays a later step ([`scanning-flows.md`](./scanning-flows.md)).
 
 Each step should build, lint, and (where tests exist) pass tests before moving to the next.
 
@@ -222,16 +241,21 @@ Schema steps add two kinds of tests:
 
 ## 9. Frontend
 
-The frontend is an Angular 21 application in `frontend/`. Angular 21 (LTS) is the newest major whose CLI supports the project's Node.js 22.14. It is a standalone-component app with no UI library, no Tailwind, and no Angular Material. It has no login and no form that creates records. The only writes are the three corrections on the booking detail page.
+The frontend is an Angular 21 application in `frontend/`. Angular 21 (LTS) is the newest major whose CLI supports the project's Node.js 22.14. It is a standalone-component app with no UI library, no Tailwind, and no Angular Material. Every page except `/login` requires a logged-in user. It has no form that creates records. The only writes are the three corrections on the booking detail page, which the API accepts from an `ADMIN` or `SYS_ADMIN` token only.
 
 ```text
 frontend/src/
 ├── environments/environment.ts  # apiBaseUrl (default http://localhost:3100)
 ├── styles.css                  # the only stylesheet
 └── app/
-    ├── app.ts / app.html       # shell: header with navigation, <router-outlet>
-    ├── app.config.ts           # router, the one HttpClient, date format
-    ├── app.routes.ts           # one lazy route per feature: /shipments, /locations
+    ├── app.ts / app.html       # shell: header with navigation and the user, <router-outlet>
+    ├── app.config.ts           # router, the one HttpClient (with authInterceptor), date format
+    ├── app.routes.ts           # /login, and one lazy, guarded route per feature: /shipments, /locations
+    ├── auth/
+    │   ├── session.ts          # Session: the token and user, kept in localStorage until expiry
+    │   ├── auth.interceptor.ts # sends Authorization: Bearer; a 401 ends the session
+    │   ├── logged-in.guard.ts  # not logged in → /login?returnUrl=…
+    │   └── login.ts / .html    # the login page
     ├── api/
     │   ├── api.models.ts       # response types, mirroring the backend *Response classes
     │   ├── api.service.ts      # ApiService: the only class calling the API; errorMessage()
@@ -243,6 +267,11 @@ frontend/src/
     └── locations/              # locations.routes.ts, location-list, location-detail
 ```
 
+- **Login:** `/login` posts the email and password to `POST /auth/login` through `ApiService.login()`.
+  - On success, `Session` stores the `accessToken`, its expiry (`expiresIn` from now) and the user in `localStorage`, so a reload or a new tab stays logged in. The page then opens the `returnUrl` (only a path inside the app) or `/shipments`. On failure it shows the API's error, and the button is disabled while the request runs.
+  - `loggedInGuard` sends a visitor who is not logged in, or whose token has expired, to `/login?returnUrl=…`.
+  - `authInterceptor` adds `Authorization: Bearer <token>` to every API request while logged in. A `401` on such a request (an expired token or a deactivated user) ends the session and opens `/login`, with "Your session has ended" and the page to return to. A `403` (a role that may not edit) is shown as the editor's error.
+  - The header shows the navigation, the user's name and roles, and Log out only while logged in. Log out removes the session and opens `/login`; there is no logout endpoint, since tokens are stateless.
 - **Pages:** each feature has a list (`/shipments`, `/locations`) and a detail page (`/shipments/:id`, `/locations/:id`).
   - A list calls `GET /<feature>` with the filters from its form. The code or name in a row links to the detail page.
   - The Locations pages call `GET /locations` and `GET /locations/:id`.

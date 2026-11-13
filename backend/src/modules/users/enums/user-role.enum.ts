@@ -1,5 +1,7 @@
+/** What a user may do; see `docs/domain-model.md` §4.2. A user holds one or more. */
 export enum UserRole {
+  SYS_ADMIN = 'SYS_ADMIN',
   ADMIN = 'ADMIN',
-  OPERATIONS_MANAGER = 'OPERATIONS_MANAGER',
-  WAREHOUSE_STAFF = 'WAREHOUSE_STAFF',
+  DOCK_MANAGER = 'DOCK_MANAGER',
+  DOCK_OPERATOR = 'DOCK_OPERATOR',
 }

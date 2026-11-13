@@ -1,0 +1,22 @@
+<section class="login">
+  <h1>Log in</h1>
+  @if (expired) {
+    <p class="error">Your session has ended. Please log in again.</p>
+  }
+  @if (error(); as message) {
+    <p class="error">{{ message }}</p>
+  }
+  <form class="stack" (submit)="submit($event)">
+    <label>
+      Email
+      <input type="email" name="email" autocomplete="username" required autofocus />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" autocomplete="current-password" required />
+    </label>
+    <button type="submit" class="primary" [disabled]="submitting()">
+      {{ submitting() ? 'Logging in…' : 'Log in' }}
+    </button>
+  </form>
+</section>

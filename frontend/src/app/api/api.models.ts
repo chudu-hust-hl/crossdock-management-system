@@ -202,6 +202,29 @@ export interface AppointmentsUpdate {
   dropoff: { from: string; to: string };
 }
 
+export type UserRole = 'SYS_ADMIN' | 'ADMIN' | 'DOCK_MANAGER' | 'DOCK_OPERATOR';
+
+/** `UserResponse`; never contains the password hash. */
+export interface User {
+  id: string;
+  fullName: string;
+  email: string;
+  roles: UserRole[];
+  status: 'ACTIVE' | 'INACTIVE';
+  lastLoginAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `LoginResponse`: the answer of `POST /auth/login`. */
+export interface LoginResponse {
+  accessToken: string;
+  tokenType: 'Bearer';
+  /** Seconds until the token expires. */
+  expiresIn: number;
+  user: User;
+}
+
 /** Body of `PUT /shipments/:id/items/:itemId`; `description: null` removes it. */
 export interface ItemUpdate {
   description: string | null;

@@ -6,6 +6,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { generateUlid, isValidUlid } from '../src/common/utils/ulid.util';
 import { validationPipeOptions } from '../src/config/validation.config';
+import { AuthModule } from '../src/modules/auth/auth.module';
 import {
   LocationPageResponse,
   LocationResponse,
@@ -13,6 +14,8 @@ import {
 import { LocationsModule } from '../src/modules/locations/locations.module';
 import { LocationsService } from '../src/modules/locations/locations.service';
 import { Location } from '../src/modules/locations/schemas/location.schema';
+import { UserRole } from '../src/modules/users/enums/user-role.enum';
+import { bearer, tokenFor } from './utils/test-auth';
 import { testDatabaseImports } from './utils/test-database';
 
 // Integration test: requires MongoDB at MONGODB_URI. Uses its own database,
@@ -42,10 +45,16 @@ describe('Locations API (integration)', () => {
   let app: INestApplication<App>;
   let locationModel: Model<Location>;
   let locationsService: LocationsService;
+  let sysAdminToken: string;
+  let adminToken: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      imports: [...testDatabaseImports(TEST_DB_NAME), LocationsModule],
+      imports: [
+        ...testDatabaseImports(TEST_DB_NAME),
+        AuthModule,
+        LocationsModule,
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication();
@@ -57,6 +66,8 @@ describe('Locations API (integration)', () => {
     locationsService = moduleRef.get(LocationsService);
     await locationModel.init();
     await locationModel.deleteMany({});
+    sysAdminToken = await tokenFor(moduleRef, UserRole.SYS_ADMIN);
+    adminToken = await tokenFor(moduleRef, UserRole.ADMIN);
   });
 
   afterAll(async () => {
@@ -65,10 +76,41 @@ describe('Locations API (integration)', () => {
   });
 
   function post(body: object) {
-    return request(app.getHttpServer()).post('/locations').send(body);
+    return request(app.getHttpServer())
+      .post('/locations')
+      .set('Authorization', bearer(sysAdminToken))
+      .send(body);
   }
 
   describe('POST /locations', () => {
+    it('needs a SYS_ADMIN token: 401 without a valid one, 403 for an ADMIN', async () => {
+      const server = app.getHttpServer();
+      const before = await locationModel.countDocuments();
+
+      const missing = await request(server)
+        .post('/locations')
+        .send(crossDock('No Token'))
+        .expect(401);
+      expect((missing.body as { message: string }).message).toBe(
+        'Missing bearer token',
+      );
+      await request(server)
+        .post('/locations')
+        .set('Authorization', 'Bearer not-a-jwt')
+        .send(crossDock('Bad Token'))
+        .expect(401);
+      const forbidden = await request(server)
+        .post('/locations')
+        .set('Authorization', bearer(adminToken))
+        .send(crossDock('Admin Token'))
+        .expect(403);
+      expect((forbidden.body as { message: string }).message).toBe(
+        'Requires one of the roles: SYS_ADMIN',
+      );
+
+      expect(await locationModel.countDocuments()).toBe(before);
+    });
+
     it('creates a cross-dock and returns its public ULID, without internal fields', async () => {
       const response = await post(crossDock('Hanoi Cross-Dock')).expect(201);
       const body = response.body as Record<string, unknown>;

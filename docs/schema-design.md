@@ -2,7 +2,7 @@
 
 Field-level Mongoose design for the six domain collections: types, required fields, defaults, enums, references, embedded documents, and indexes. Domain concepts and the reasons behind them are in [`domain-model.md`](./domain-model.md); this document does not repeat them.
 
-All six schemas are **implemented** in `backend/src/modules/<module>/schemas/`, and each is registered with `MongooseModule.forFeature` in its own feature module. The supporting `metadata` collection is described in §11. The implemented APIs are listed in [`business-workflows.md`](./business-workflows.md) (§6 Locations, §7 Shipments).
+All six schemas are **implemented** in `backend/src/modules/<module>/schemas/`, and each is registered with `MongooseModule.forFeature` in its own feature module. The supporting `metadata` collection is described in §11. The implemented APIs are listed in [`business-workflows.md`](./business-workflows.md) (§6 Locations, §7 Shipments, §8 Auth and Users).
 
 | Collection | Model | Schema file |
 | --- | --- | --- |
@@ -127,8 +127,8 @@ There is no `locationCode`. A location is identified by its `id`.
 | `id` | `String` | yes | `generateUlid()` | common `id` convention |
 | `fullName` | `String` | yes | | trimmed |
 | `email` | `String` | yes | | unique, trimmed, **lower-cased**, so case variants collide on the unique index |
-| `passwordHash` | `String` | no | | Reserved for future internal authentication; never a plaintext password. `select: false`: excluded from queries unless `.select('+passwordHash')`. |
-| `roles` | `UserRole[]` | yes | `[]` | `ADMIN`, `OPERATIONS_MANAGER`, `WAREHOUSE_STAFF`; may be empty |
+| `passwordHash` | `String` | no | | bcrypt hash (`bcryptjs`, cost 10) of the login password. Never plaintext, never returned. `select: false`: excluded from queries unless `.select('+passwordHash')`. |
+| `roles` | `UserRole[]` | yes | `[]` | `SYS_ADMIN`, `ADMIN`, `DOCK_MANAGER`, `DOCK_OPERATOR`. A user may hold several. The schema allows `[]`; `CreateUserDto` and `UpdateUserDto` require at least one role, without duplicates ([`domain-model.md` §4.2](./domain-model.md#42-user)). |
 | `status` | `UserStatus` | yes | `ACTIVE` | `ACTIVE`, `INACTIVE`, `LOCKED` |
 | `lastLoginAt` | `Date` | no | | |
 
@@ -310,7 +310,9 @@ These rules span documents, or depend on workflow state, so the schemas cannot e
 
 **User**
 
-- Authentication, password hashing, and role-based authorization (later tasks).
+- Login, password hashing, and which role may call which endpoint are specified in [`domain-model.md` §4.2](./domain-model.md#42-user) and implemented in `AuthModule` and `UsersService`. A password is stored only as `passwordHash`.
+- `UsersService` stores the email lower-cased itself, and a duplicate email (`11000`) is a `409`.
+- A `SYS_ADMIN` cannot set their own `status` to `LOCKED` or `INACTIVE`, or save their own `roles` without `SYS_ADMIN`.
 
 ## 10. Decisions to confirm
 

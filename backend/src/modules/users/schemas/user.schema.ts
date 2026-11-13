@@ -32,7 +32,7 @@ export class User {
   email!: string;
 
   /**
-   * Reserved for future internal authentication; never a plaintext password.
+   * bcrypt hash of the login password; never a plaintext password.
    * Excluded from query results unless selected with `.select('+passwordHash')`.
    */
   @Prop({ type: String, select: false })

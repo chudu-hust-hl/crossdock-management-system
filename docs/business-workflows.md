@@ -6,6 +6,8 @@ This document records business processes that span several collections: how Loca
 - The Location API and the Location reuse rule are implemented (§2, §6).
 - Shipment booking (shipment, items, cost), routing, child shipments, and route assignment of a routed booking are implemented (§4, §5, §7).
 - Listing (filtered, sorted, paginated) and detail lookup of Locations and Shipments are implemented (§6, §7).
+- Token login, user management by `SYS_ADMIN`, and the role checks on the writes are implemented (§8).
+- Scanning, dock tasks, and the status changes that follow each dock action are specified in [`scanning-flows.md`](./scanning-flows.md) and are not implemented.
 
 ## 1. Location creation sources
 
@@ -245,7 +247,7 @@ Two kinds of route:
 - **Store and dock.** A child whose ends are a `STORE` and a `CROSS_DOCK` (A → A', or B' → B) gets a new route that carries only that child. Its two stops are that child's two `deliveryInfos`. The appointment is the store end's appointment (the pickup appointment on A → A', the drop-off appointment on B' → B). A later direct store-to-store child, if routing could not choose hubs, uses this same dedicated route. That case is not built in this step.
 - **Dock and dock.** A child whose ends are both `CROSS_DOCK` (A' → B') joins one shared route per direction, per Vietnam calendar day, per slot. The opposite direction is a different route. The key is the origin dock, the destination dock, `serviceDate` (`YYYY-MM-DD` in Vietnam time, UTC+7), and `slot`. `MORNING` has appointment 08:00–12:00 that day. `EVENING` has 18:00–22:00. A booking placed before 12:00 uses that day's morning route. A booking placed from 12:00 uses that day's evening route. The service looks for a non-deleted route with that key and status `PLANNED`. If it finds one, it appends the child to `shipmentIds`, to both stops' `shipmentIds`, and appends the item snapshots. If that route exists but is no longer `PLANNED`, the child goes to the next slot (the evening of the same day, or the morning of the next day). If none exists, the service creates it. Both stops are `TRANSIT`. A unique index on `fromLocationId` + `toLocationId` + `serviceDate` + `slot`, only where `slot` is set and `deletedAt` is null, stops two requests from creating the same trunk route. Those four fields equal the two stop locations, the day, and the slot.
 
-A failure while assigning one child does not remove the children or the trunk routes already shared with other bookings. `currentShipmentId` stays the root.
+A failure while assigning one child does not remove the children or the trunk routes already shared with other bookings. `currentShipmentId` stays the root. No DockTask is created by booking or by route assignment. The first tasks are created when a dock action runs ([`scanning-flows.md`](./scanning-flows.md)).
 
 ## 6. Location API
 
@@ -272,7 +274,8 @@ Sorting: `sortBy` is `name` (default), `createdAt` or `updatedAt`. Paging and `s
 - **Response body:** `LocationResponse` (`dto/location-response.dto.ts`), with the public `id` and no `_id`, `__v`, or `deletedAt`. A list returns `LocationPageResponse`: `{ items, page, limit, total }`.
 - **Errors:** validation errors, including invalid query parameters, return `400` with Nest's standard `{ statusCode, message: string[], error }` body.
 - **For other modules:** `LocationsService.resolveCandidate(candidate)` applies the reuse rule to a `LocationCandidateDto` and returns `{ location, created }`. `LocationsModule` exports the service for the future shipment workflow. It has no HTTP endpoint of its own.
-- **Not implemented yet:** update, soft-delete, and authorization (who may create Locations).
+- **Who may call it:** `POST /locations` needs a `SYS_ADMIN` token: `401` without a valid one, `403` for another role ([`domain-model.md` §4.2](./domain-model.md#42-user)). The two `GET`s are public.
+- **Not implemented yet:** update and soft-delete.
 
 ## 7. Shipment API
 
@@ -316,7 +319,8 @@ Sorting: `sortBy` is `createdAt` (default), `updatedAt`, `code`, `customerName` 
   - `409`: an item barcode is already registered, or was taken by a concurrent request; a `PUT` on a booking whose status is not `CREATED`.
   - `503`: pricing is not configured (§4.3), for booking and for `PUT /shipments/:id/items/:itemId`.
   - `500`: any other failure. A failure in steps 4 to 8 undoes the booking (§4.4). A failure while saving routed `deliveryInfos` does not.
-- **Not implemented yet:** cancelling shipments, changing the items of a booking (adding or removing one), changing a route's driver or vehicle, and authorization. DockTasks are not created by booking.
+- **Who may call it:** `POST /shipments/book` and the three `PUT`s need a `SYS_ADMIN` or `ADMIN` token: `401` without a valid one, `403` for another role ([`domain-model.md` §4.2](./domain-model.md#42-user)). The `GET`s are public.
+- **Not implemented yet:** cancelling shipments, changing the items of a booking (adding or removing one), and changing a route's driver or vehicle. DockTasks are not created by booking. A route's `createdBy` is still the placeholder ULID, not the caller.
 
 ### 7.1 Booking view
 
@@ -364,3 +368,25 @@ The dock–dock route keeps its slot appointment. `actualWindow` and point statu
 The writes are not in a transaction (the local MongoDB is standalone). A failure part-way leaves the earlier writes in place, and the same `PUT` can be sent again.
 
 No other `PUT` exists. Items are not added to or removed from a booking.
+
+## 8. Auth and User API
+
+Implemented in `backend/src/modules/auth/` (`AuthController`, `AuthService`, `AuthGuard`) and `backend/src/modules/users/` (`UsersController`, `UsersService`). Roles, login rules, and who may call which endpoint are in [`domain-model.md` §4.2](./domain-model.md#42-user).
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /auth/login` | Body: `LoginDto` `{ email, password }`. Returns `200` with `LoginResponse`: `{ accessToken, tokenType: 'Bearer', expiresIn: 28800, user }`, and sets `lastLoginAt`. Any failure is `401` "Invalid email or password." Public. |
+| `POST /users` | Body: `CreateUserDto`: `fullName`, `email`, `password` (at least 8 characters), `roles` (at least one, no duplicates). The user is `ACTIVE`. Returns `201`. |
+| `GET /users` | One page of non-deleted users (`ListUsersQueryDto`). Filters: `email` (any part, ignoring case) and `status`. Default: `fullName` ascending, 20 per page. |
+| `GET /users/:id` | One user. `404` if unknown or soft-deleted; `400` if `id` is not a ULID. |
+| `PUT /users/:id` | Body: `UpdateUserDto`. Any of `fullName`, `email`, `roles`, `status`, `password`; only the fields sent change. `roles` replaces all roles and must not be empty. |
+
+- **Who may call it:** the four `/users` endpoints need a `SYS_ADMIN` token: `401` without a valid one, `403` for another role. There is no registration endpoint.
+- **Response body:** `UserResponse` (`users/dto/user-response.dto.ts`): `id`, `fullName`, `email`, `roles`, `status`, `lastLoginAt`, `createdAt`, `updatedAt`. There is no `passwordHash`, `_id`, `__v` or `deletedAt`. A list returns `UserPageResponse`: `{ items, page, limit, total }`.
+- **Passwords** are hashed with `bcryptjs` before they are stored as `passwordHash`, on create and on a `PUT` that sends `password`.
+- **Errors:**
+  - `400`: validation messages; on your own user, a `status` of `LOCKED` or `INACTIVE` ("You cannot set your own status to …") or `roles` without `SYS_ADMIN` ("You cannot remove SYS_ADMIN from your own roles.").
+  - `404`: an unknown or soft-deleted user.
+  - `409`: the email already belongs to a user, in any case, including a soft-deleted one.
+- **First user:** with an empty database nobody can log in. On startup, `UsersService` creates the first `SYS_ADMIN` from `AUTH_SEED_EMAIL`, `AUTH_SEED_PASSWORD` and `AUTH_SEED_NAME` ([`architecture.md` §6](./architecture.md#6-configuration-and-local-infrastructure)).
+- **Not implemented yet:** soft-deleting a user. The frontend login screen is described in [`architecture.md` §9](./architecture.md#9-frontend).

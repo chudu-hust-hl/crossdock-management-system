@@ -11,6 +11,8 @@ export function createSwaggerDocument(app: INestApplication): OpenAPIObject {
       'Logistics and cross-dock operations. Every resource is identified by its public ULID `id`.',
     )
     .setVersion('0.0.1')
+    // The token from POST /auth/login; required by the routes marked with a lock.
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' })
     .build();
   return SwaggerModule.createDocument(app, config);
 }

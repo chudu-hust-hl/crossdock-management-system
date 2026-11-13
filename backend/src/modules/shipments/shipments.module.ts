@@ -5,6 +5,7 @@ import { LocationsModule } from '../locations/locations.module';
 import { MetadataModule } from '../metadata/metadata.module';
 import { RoutesModule } from '../routes/routes.module';
 import { RoutingModule } from '../routing/routing.module';
+import { UsersModule } from '../users/users.module';
 import { Shipment, ShipmentSchema } from './schemas/shipment.schema';
 import { ShipmentCostService } from './shipment-cost.service';
 import { ShipmentEditsService } from './shipment-edits.service';
@@ -21,6 +22,8 @@ import { ShipmentsService } from './shipments.service';
     MetadataModule,
     RoutingModule,
     RoutesModule,
+    // For AuthGuard on the booking and its corrections.
+    UsersModule,
   ],
   controllers: [ShipmentsController],
   providers: [ShipmentsService, ShipmentEditsService, ShipmentCostService],

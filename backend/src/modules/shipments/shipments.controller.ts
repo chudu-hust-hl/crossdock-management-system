@@ -1,17 +1,32 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiServiceUnavailableResponse,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto';
 import { UlidParamDto } from '../../common/dto/ulid-param.dto';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
 import { UpdateItemDto } from '../items/dto/update-item.dto';
+import { UserRole } from '../users/enums/user-role.enum';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ListShipmentsQueryDto } from './dto/list-shipments-query.dto';
 import { ShipmentItemParamDto } from './dto/shipment-item-param.dto';
@@ -75,6 +90,17 @@ export class ShipmentsController {
     type: ErrorResponseDto,
     description: 'Pricing rates (PRICING_* variables) are not configured.',
   })
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    type: ErrorResponseDto,
+    description: 'Missing or invalid token, or the user is no longer ACTIVE.',
+  })
+  @ApiForbiddenResponse({
+    type: ErrorResponseDto,
+    description: 'The caller is neither a SYS_ADMIN nor an ADMIN.',
+  })
+  @UseGuards(AuthGuard)
+  @Roles(UserRole.SYS_ADMIN, UserRole.ADMIN)
   async create(@Body() dto: CreateShipmentDto): Promise<BookShipmentResponse> {
     const booked = await this.shipmentsService.create(dto);
     return toBookShipmentResponse(booked.shipment, booked.routingStoppedReason);
@@ -163,6 +189,17 @@ export class ShipmentsController {
     type: ErrorResponseDto,
     description: 'The booking is no longer `CREATED`.',
   })
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    type: ErrorResponseDto,
+    description: 'Missing or invalid token, or the user is no longer ACTIVE.',
+  })
+  @ApiForbiddenResponse({
+    type: ErrorResponseDto,
+    description: 'The caller is neither a SYS_ADMIN nor an ADMIN.',
+  })
+  @UseGuards(AuthGuard)
+  @Roles(UserRole.SYS_ADMIN, UserRole.ADMIN)
   async updateCustomer(
     @Param() params: UlidParamDto,
     @Body() dto: UpdateShipmentCustomerDto,
@@ -196,6 +233,17 @@ export class ShipmentsController {
     type: ErrorResponseDto,
     description: 'The booking is no longer `CREATED`.',
   })
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    type: ErrorResponseDto,
+    description: 'Missing or invalid token, or the user is no longer ACTIVE.',
+  })
+  @ApiForbiddenResponse({
+    type: ErrorResponseDto,
+    description: 'The caller is neither a SYS_ADMIN nor an ADMIN.',
+  })
+  @UseGuards(AuthGuard)
+  @Roles(UserRole.SYS_ADMIN, UserRole.ADMIN)
   async updateAppointments(
     @Param() params: UlidParamDto,
     @Body() dto: UpdateAppointmentsDto,
@@ -231,6 +279,17 @@ export class ShipmentsController {
     type: ErrorResponseDto,
     description: 'Pricing rates (PRICING_* variables) are not configured.',
   })
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    type: ErrorResponseDto,
+    description: 'Missing or invalid token, or the user is no longer ACTIVE.',
+  })
+  @ApiForbiddenResponse({
+    type: ErrorResponseDto,
+    description: 'The caller is neither a SYS_ADMIN nor an ADMIN.',
+  })
+  @UseGuards(AuthGuard)
+  @Roles(UserRole.SYS_ADMIN, UserRole.ADMIN)
   async updateItem(
     @Param() params: ShipmentItemParamDto,
     @Body() dto: UpdateItemDto,

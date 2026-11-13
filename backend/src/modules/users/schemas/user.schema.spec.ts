@@ -88,14 +88,28 @@ describe('UserSchema', () => {
       ]);
     });
 
-    it('rejects unsupported roles and statuses', () => {
+    it('allows exactly the four agreed roles', () => {
+      expect(Object.values(UserRole)).toEqual([
+        'SYS_ADMIN',
+        'ADMIN',
+        'DOCK_MANAGER',
+        'DOCK_OPERATOR',
+      ]);
+    });
+
+    it('rejects unsupported and retired roles, and unsupported statuses', () => {
       expect(
         validationErrorPaths({
           ...validUserInput(),
-          roles: [UserRole.ADMIN, 'SUPERUSER'],
+          roles: [
+            UserRole.ADMIN,
+            'SUPERUSER',
+            'OPERATIONS_MANAGER',
+            'WAREHOUSE_STAFF',
+          ],
           status: 'BANNED',
         }),
-      ).toEqual(['roles.1', 'status']);
+      ).toEqual(['roles.1', 'roles.2', 'roles.3', 'status']);
     });
 
     it('allows exactly the ACTIVE, INACTIVE, and LOCKED statuses', () => {
