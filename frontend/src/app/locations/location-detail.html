@@ -1,0 +1,31 @@
+<p><a routerLink="/locations">← Locations</a></p>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let location = current.data;
+  <h1>
+    {{ location.name }}
+    <span class="status" [attr.data-status]="location.status">{{ location.status }}</span>
+  </h1>
+
+  <dl class="fields">
+    <dt>ID</dt>
+    <dd class="id">{{ location.id }}</dd>
+    <dt>Type</dt>
+    <dd>{{ location.type }}</dd>
+    <dt>Contact</dt>
+    <dd>{{ location.contactName ?? '–' }}</dd>
+    <dt>Phone</dt>
+    <dd>{{ location.contactPhone ?? '–' }}</dd>
+    <dt>Address</dt>
+    <dd>{{ addressLine(location.address) }}</dd>
+    <dt>Created</dt>
+    <dd>{{ location.createdAt | date }}</dd>
+    <dt>Updated</dt>
+    <dd>{{ location.updatedAt | date }}</dd>
+  </dl>
+}

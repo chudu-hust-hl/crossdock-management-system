@@ -1,0 +1,75 @@
+<h1>Shipments</h1>
+
+<form class="filters" (submit)="search($event)">
+  <label>
+    Code
+    <input name="code" [value]="params().get('code') ?? ''" />
+  </label>
+  <label>
+    Customer
+    <input name="customerName" [value]="params().get('customerName') ?? ''" />
+  </label>
+  <label>
+    Status
+    <select name="status">
+      <option value="">All</option>
+      @for (status of statuses; track status) {
+        <option [value]="status" [selected]="params().get('status') === status">
+          {{ status }}
+        </option>
+      }
+    </select>
+  </label>
+  <button type="submit" class="primary">Search</button>
+  <button type="button" (click)="clear()">Clear</button>
+</form>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let page = current.data;
+  @if (page.items.length === 0) {
+    <p class="muted">No shipments found.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Booking</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (shipment of page.items; track shipment.id) {
+          <tr>
+            <td>
+              <div>
+                <a class="key" [routerLink]="shipment.id">{{ shipment.code }}</a>
+                ·
+                <span class="status" [attr.data-status]="shipment.status">{{ shipment.status }}</span>
+                @if (!shipment.routed) {
+                  · <span class="muted">Not routed</span>
+                }
+              </div>
+              <div class="lane">
+                {{ endLabel(shipment.origin) }} <span>→</span> {{ endLabel(shipment.destination) }}
+              </div>
+              <div>
+                Pickup {{ (shipment.pickupAppointment.from | date) ?? '–' }} –
+                {{ (shipment.pickupAppointment.to | date) ?? '–' }} · Drop-off
+                {{ (shipment.dropoffAppointment.from | date) ?? '–' }} –
+                {{ (shipment.dropoffAppointment.to | date) ?? '–' }}
+              </div>
+              <div class="muted">
+                {{ shipment.customerName ?? '–' }} · {{ (shipment.cost | number) ?? '–' }} VND ·
+                {{ itemsLine(shipment.items) }}
+              </div>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+  <app-pager [page]="page.page" [limit]="page.limit" [total]="page.total" />
+}

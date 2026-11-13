@@ -1,0 +1,80 @@
+<h1>Locations</h1>
+
+<form class="filters" (submit)="search($event)">
+  <label>
+    Name
+    <input name="name" [value]="params().get('name') ?? ''" />
+  </label>
+  <label>
+    Type
+    <select name="type">
+      <option value="">All</option>
+      @for (type of types; track type) {
+        <option [value]="type" [selected]="params().get('type') === type">
+          {{ type }}
+        </option>
+      }
+    </select>
+  </label>
+  <label>
+    Status
+    <select name="status">
+      <option value="">All</option>
+      @for (status of statuses; track status) {
+        <option [value]="status" [selected]="params().get('status') === status">
+          {{ status }}
+        </option>
+      }
+    </select>
+  </label>
+  <label>
+    Postal code
+    <input name="postalCode" [value]="params().get('postalCode') ?? ''" />
+  </label>
+  <button type="submit" class="primary">Search</button>
+  <button type="button" (click)="clear()">Clear</button>
+</form>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let page = current.data;
+  @if (page.items.length === 0) {
+    <p class="muted">No locations found.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Contact</th>
+          <th>Postal code</th>
+          <th>City</th>
+          <th>ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (location of page.items; track location.id) {
+          <tr>
+            <td>
+              <a class="key" [routerLink]="location.id">{{ location.name }}</a>
+            </td>
+            <td>{{ location.type }}</td>
+            <td>
+              <span class="status" [attr.data-status]="location.status">{{ location.status }}</span>
+            </td>
+            <td>{{ location.contactName ?? '–' }}</td>
+            <td>{{ location.address.postalCode }}</td>
+            <td>{{ location.address.city ?? '–' }}</td>
+            <td class="id muted">{{ location.id }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+  <app-pager [page]="page.page" [limit]="page.limit" [total]="page.total" />
+}

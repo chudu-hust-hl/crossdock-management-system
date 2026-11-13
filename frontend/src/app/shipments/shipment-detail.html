@@ -1,0 +1,372 @@
+<p><a routerLink="/shipments">← Shipments</a></p>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let view = current.data;
+  @let shipment = view.shipment;
+  @let editable = shipment.status === 'CREATED';
+  @let locked = editable ? null : lockedTitle;
+  <h1>
+    {{ shipment.code }}
+    <span class="status" [attr.data-status]="shipment.status">{{ shipment.status }}</span>
+    @if (!isRouted(shipment)) {
+      · <span class="muted">Not routed</span>
+    }
+  </h1>
+
+  <dl class="fields">
+    <dt>Customer</dt>
+    <dd>
+      @if (isEditingCustomer()) {
+        @if (editError(); as message) {
+          <p class="error">{{ message }}</p>
+        }
+        <form class="inline" (submit)="saveCustomer($event, shipment.id)">
+          <input name="customerName" required [value]="shipment.customerName ?? ''" />
+          <button type="submit" class="primary" [disabled]="saving()">Save</button>
+          <button type="button" (click)="cancel()">Cancel</button>
+        </form>
+      } @else {
+        {{ shipment.customerName ?? '–' }}
+        <button
+          type="button"
+          class="icon"
+          aria-label="Edit"
+          [disabled]="!editable"
+          [attr.title]="locked ?? 'Edit'"
+          (click)="open({ kind: 'customer' })"
+        >
+          <nz-icon nzType="edit" />
+        </button>
+      }
+    </dd>
+    <dt>Cost</dt>
+    <dd>{{ (shipment.cost | number) ?? '–' }} VND</dd>
+    <dt>Created</dt>
+    <dd>{{ shipment.createdAt | date }}</dd>
+  </dl>
+
+  <h2>Path</h2>
+  <table>
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th>Type</th>
+        <th>Location</th>
+        <th>Location type</th>
+        <th>Province</th>
+        <th>Appointment</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (point of points(shipment); track point.sequence) {
+        @let place = location(point.locationId);
+        @let end = storeEnd(point);
+        @let editing = isEditingAppointment(end);
+        @if (editing && editError(); as message) {
+          <tr>
+            <td colspan="8">
+              <p class="error">{{ message }}</p>
+            </td>
+          </tr>
+        }
+        <tr>
+          <td class="num">{{ point.sequence }}</td>
+          <td [class.key]="end !== null">{{ point.type }}</td>
+          <td>
+            <a [routerLink]="['/locations', point.locationId]">{{
+              locationName(point.locationId)
+            }}</a>
+          </td>
+          <td>{{ place?.type ?? '–' }}</td>
+          <td>{{ place?.address?.province ?? '–' }}</td>
+          <td>
+            @if (editing) {
+              <span class="inline">
+                <input
+                  form="appointment-editor"
+                  type="datetime-local"
+                  name="from"
+                  required
+                  [value]="toLocalInput(point.appointment.from)"
+                />
+                –
+                <input
+                  form="appointment-editor"
+                  type="datetime-local"
+                  name="to"
+                  required
+                  [value]="toLocalInput(point.appointment.to)"
+                />
+              </span>
+            } @else if (point.appointment.from || point.appointment.to) {
+              {{ (point.appointment.from | date) ?? '–' }} –
+              {{ (point.appointment.to | date) ?? '–' }}
+            } @else {
+              –
+            }
+          </td>
+          <td>
+            <span class="status" [attr.data-status]="point.status">{{ point.status }}</span>
+          </td>
+          <td>
+            @if (editing && end) {
+              <form
+                id="appointment-editor"
+                class="inline"
+                (submit)="saveAppointment($event, shipment, end)"
+              >
+                <button type="submit" class="primary" [disabled]="saving()">Save</button>
+                <button type="button" (click)="cancel()">Cancel</button>
+              </form>
+            } @else if (end) {
+              <button
+                type="button"
+                class="icon"
+                aria-label="Edit"
+                [disabled]="!editable"
+                [attr.title]="locked ?? 'Edit'"
+                (click)="open({ kind: 'appointment', end })"
+              >
+                <nz-icon nzType="edit" />
+              </button>
+            } @else {
+              <button
+                type="button"
+                class="icon"
+                aria-label="Edit"
+                disabled
+                title="Hub time is not set"
+              >
+                <nz-icon nzType="edit" />
+              </button>
+            }
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+
+  <h2>Items ({{ view.items.length }})</h2>
+  @if (view.items.length === 0) {
+    <p class="muted">No items.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Code</th>
+          <th>Barcode</th>
+          <th>Description</th>
+          <th>Unit</th>
+          <th>Weight</th>
+          <th>Dimensions</th>
+          <th>Status</th>
+          <th>Current location</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of view.items; track item.id) {
+          @let editing = isEditingItem(item.id);
+          @if (editing && editError(); as message) {
+            <tr>
+              <td colspan="9">
+                <p class="error">{{ message }}</p>
+              </td>
+            </tr>
+          }
+          <tr>
+            <td class="key">{{ item.itemCode }}</td>
+            <td>{{ item.barcode }}</td>
+            @if (editing) {
+              <td>
+                <input
+                  form="item-editor"
+                  name="description"
+                  size="18"
+                  [value]="item.description ?? ''"
+                />
+              </td>
+              <td>
+                <select form="item-editor" name="itemUnit">
+                  @for (unit of itemUnits; track unit) {
+                    <option [value]="unit" [selected]="unit === item.itemUnit">{{ unit }}</option>
+                  }
+                </select>
+              </td>
+              <td>
+                <span class="inline">
+                  <input
+                    form="item-editor"
+                    name="weight"
+                    inputmode="decimal"
+                    size="5"
+                    required
+                    [value]="item.weight ?? ''"
+                  />
+                  <select form="item-editor" name="weightUnit">
+                    @for (unit of weightUnits; track unit) {
+                      <option [value]="unit" [selected]="unit === item.weightUnit">
+                        {{ unit }}
+                      </option>
+                    }
+                  </select>
+                </span>
+              </td>
+              <td>
+                <span class="inline">
+                  <input
+                    form="item-editor"
+                    name="length"
+                    inputmode="decimal"
+                    size="3"
+                    aria-label="Length"
+                    [value]="item.dimensions?.length ?? ''"
+                  />
+                  ×
+                  <input
+                    form="item-editor"
+                    name="width"
+                    inputmode="decimal"
+                    size="3"
+                    aria-label="Width"
+                    [value]="item.dimensions?.width ?? ''"
+                  />
+                  ×
+                  <input
+                    form="item-editor"
+                    name="height"
+                    inputmode="decimal"
+                    size="3"
+                    aria-label="Height"
+                    [value]="item.dimensions?.height ?? ''"
+                  />
+                  <select form="item-editor" name="dimensionUnit">
+                    @for (unit of dimensionUnits; track unit) {
+                      <option [value]="unit" [selected]="unit === item.dimensions?.unit">
+                        {{ unit }}
+                      </option>
+                    }
+                  </select>
+                </span>
+              </td>
+            } @else {
+              <td>{{ item.description ?? '–' }}</td>
+              <td>{{ item.itemUnit }}</td>
+              <td>{{ item.weight ?? '–' }} {{ item.weightUnit }}</td>
+              <td>
+                @if (item.dimensions; as size) {
+                  {{ size.length }} × {{ size.width }} × {{ size.height }} {{ size.unit }}
+                } @else {
+                  –
+                }
+              </td>
+            }
+            <td>
+              <span class="status" [attr.data-status]="item.status">{{ item.status }}</span>
+            </td>
+            <td>{{ locationName(item.currentLocationId) }}</td>
+            <td>
+              @if (editing) {
+                <form
+                  id="item-editor"
+                  class="inline"
+                  (submit)="saveItem($event, shipment.id, item.id)"
+                >
+                  <button type="submit" class="primary" [disabled]="saving()">Save</button>
+                  <button type="button" (click)="cancel()">Cancel</button>
+                </form>
+              } @else {
+                <button
+                  type="button"
+                  class="icon"
+                  aria-label="Edit"
+                  [disabled]="!editable"
+                  [attr.title]="locked ?? 'Edit'"
+                  (click)="open({ kind: 'item', itemId: item.id })"
+                >
+                  <nz-icon nzType="edit" />
+                </button>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+
+  <h2>Legs</h2>
+  @if (view.children.length === 0) {
+    <p class="muted">No legs: the booking is not routed.</p>
+  }
+  @for (leg of view.children; track leg.id) {
+    @let ends = points(leg);
+    @let appointment = legAppointment(leg);
+    <p>
+      <span class="key">{{ leg.code }}</span> ·
+      <span class="status" [attr.data-status]="leg.status">{{ leg.status }}</span>
+    </p>
+    <p class="lane">
+      {{ locationName(ends[0]?.locationId) }} <span>→</span>
+      {{ locationName(ends[ends.length - 1]?.locationId) }}
+    </p>
+    @if (appointment) {
+      <p>
+        Appointment {{ (appointment.from | date) ?? '–' }} – {{ (appointment.to | date) ?? '–' }}
+      </p>
+    }
+    @let routes = routesOf(view, leg.id);
+    @if (routes.length === 0) {
+      <p class="muted">No route.</p>
+    } @else {
+      <table>
+        <thead>
+          <tr>
+            <th>Route</th>
+            <th>Status</th>
+            <th>Driver</th>
+            <th>Vehicle</th>
+            <th>Schedule</th>
+            <th>Items on this leg</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (route of routes; track route.id) {
+            <tr>
+              <td class="key">{{ route.routeNumber }}</td>
+              <td>
+                <span class="status" [attr.data-status]="route.status">{{ route.status }}</span>
+              </td>
+              <td>{{ route.driverName }}</td>
+              <td>{{ route.vehiclePlate }}</td>
+              <td>{{ route.slot ? route.slot + ' ' + route.serviceDate : 'dedicated' }}</td>
+              <td>
+                @for (row of snapshotOf(route, leg.id); track row.itemId) {
+                  <div>{{ row.itemCode }} · {{ row.barcode }}</div>
+                }
+              </td>
+              <td>
+                <button
+                  type="button"
+                  class="icon"
+                  aria-label="Edit"
+                  disabled
+                  title="Driver and vehicle are fixed for now"
+                >
+                  <nz-icon nzType="edit" />
+                </button>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  }
+}
