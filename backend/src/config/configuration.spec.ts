@@ -20,6 +20,14 @@ describe('configuration', () => {
     process.env = originalEnv;
   });
 
+  it('allows the Angular dev server origin by default', () => {
+    delete process.env.CORS_ORIGIN;
+    expect(configuration().corsOrigin).toBe('http://localhost:4200');
+
+    process.env.CORS_ORIGIN = 'http://localhost:4300';
+    expect(configuration().corsOrigin).toBe('http://localhost:4300');
+  });
+
   it('disables pricing when no PRICING_* variable is set', () => {
     expect(configuration().pricing).toBeNull();
   });

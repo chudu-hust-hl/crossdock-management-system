@@ -3,6 +3,12 @@ import { DeliveryPointStatus } from '../../../common/enums/delivery-point-status
 import { DeliveryPointType } from '../../../common/enums/delivery-point-type.enum';
 import { generateUlid, ulidValidator } from '../../../common/utils/ulid.util';
 import { RouteStatus } from '../enums/route-status.enum';
+import {
+  ROUTE_CREATED_BY,
+  ROUTE_DRIVER_NAME,
+  ROUTE_VEHICLE_PLATE,
+} from '../route-assignment.constants';
+import { RouteItemSchema } from './route-item.schema';
 import { RouteStopSchema } from './route-stop.schema';
 import { Route, RouteSchema } from './route.schema';
 
@@ -15,6 +21,10 @@ function stop(sequence: number, type: DeliveryPointType) {
 function validRouteInput() {
   return {
     routeNumber: 'R-0001-1026',
+    fromLocationId: generateUlid(),
+    toLocationId: generateUlid(),
+    driverName: ROUTE_DRIVER_NAME,
+    vehiclePlate: ROUTE_VEHICLE_PLATE,
     createdBy: generateUlid(),
     stops: [
       stop(1, DeliveryPointType.PICKUP),
@@ -47,9 +57,25 @@ describe('RouteSchema', () => {
           { fields: { routeNumber: 1 }, unique: true },
           { fields: { shipmentIds: 1 }, unique: false },
           { fields: { status: 1, 'appointment.from': 1 }, unique: false },
+          {
+            fields: {
+              fromLocationId: 1,
+              toLocationId: 1,
+              serviceDate: 1,
+              slot: 1,
+            },
+            unique: true,
+          },
         ]),
       );
-      expect(indexes).toHaveLength(4);
+      expect(indexes).toHaveLength(5);
+      const lane = RouteSchema.indexes().find(
+        ([fields]) => fields.slot === 1 && fields.fromLocationId === 1,
+      );
+      expect(lane?.[1]).toMatchObject({
+        unique: true,
+        partialFilterExpression: { slot: { $exists: true }, deletedAt: null },
+      });
     });
 
     it('generates id with the shared ULID utility', () => {
@@ -71,6 +97,26 @@ describe('RouteSchema', () => {
         required: true,
         validate: ulidValidator,
       });
+      expect(RouteSchema.path('fromLocationId').options).toMatchObject({
+        type: String,
+        required: true,
+        validate: ulidValidator,
+      });
+      expect(RouteSchema.path('toLocationId').options).toMatchObject({
+        type: String,
+        required: true,
+        validate: ulidValidator,
+      });
+      expect(RouteItemSchema.path('itemId').options).toMatchObject({
+        type: String,
+        required: true,
+        validate: ulidValidator,
+      });
+      expect(RouteItemSchema.path('shipmentId').options).toMatchObject({
+        type: String,
+        required: true,
+        validate: ulidValidator,
+      });
       expect(RouteStopSchema.path('locationId').options).toMatchObject({
         type: String,
         required: true,
@@ -85,7 +131,22 @@ describe('RouteSchema', () => {
         validationErrorPaths({
           routeNumber: 'R-0001-1026',
           createdBy: objectId,
+          fromLocationId: objectId,
+          toLocationId: objectId,
+          driverName: ROUTE_DRIVER_NAME,
+          vehiclePlate: ROUTE_VEHICLE_PLATE,
           shipmentIds: [objectId],
+          items: [
+            {
+              itemId: objectId,
+              shipmentId: objectId,
+              itemCode: 'T-0001-1026',
+              barcode: 'B-1',
+              itemUnit: 'BOX',
+              weight: 1,
+              weightUnit: 'KG',
+            },
+          ],
           stops: [
             {
               sequence: 1,
@@ -97,14 +158,19 @@ describe('RouteSchema', () => {
         }),
       ).toEqual([
         'createdBy',
+        'fromLocationId',
+        'items.0.itemId',
+        'items.0.shipmentId',
         'shipmentIds.0',
         'stops.0.locationId',
         'stops.0.shipmentIds.0',
+        'toLocationId',
       ]);
     });
 
-    it('embeds stops without an _id and has no duplicate planned/actual fields', () => {
+    it('embeds stops and item snapshots without an _id and has no duplicate planned/actual fields', () => {
       expect(RouteStopSchema.path('_id')).toBeUndefined();
+      expect(RouteItemSchema.path('_id')).toBeUndefined();
       for (const field of [
         'plannedStartAt',
         'plannedEndAt',
@@ -139,9 +205,12 @@ describe('RouteSchema', () => {
       expect(stored).toMatchObject({
         status: RouteStatus.PLANNED,
         shipmentIds: [],
+        items: [],
         appointment: { from: null, to: null },
         actualWindow: { from: null, to: null },
       });
+      expect(stored.serviceDate).toBeUndefined();
+      expect(stored.slot).toBeUndefined();
       expect(stored.stops[0]).toMatchObject({
         status: DeliveryPointStatus.PENDING,
         shipmentIds: [],
@@ -152,8 +221,39 @@ describe('RouteSchema', () => {
   });
 
   describe('validation', () => {
-    it('requires routeNumber and createdBy', () => {
-      expect(validationErrorPaths({})).toEqual(['createdBy', 'routeNumber']);
+    it('requires routeNumber, the two ends, the driver, the vehicle, and createdBy', () => {
+      expect(validationErrorPaths({})).toEqual([
+        'createdBy',
+        'driverName',
+        'fromLocationId',
+        'routeNumber',
+        'toLocationId',
+        'vehiclePlate',
+      ]);
+    });
+
+    it('accepts the booking placeholders and a dock-dock slot', () => {
+      expect(
+        validationErrorPaths({
+          ...validRouteInput(),
+          createdBy: ROUTE_CREATED_BY,
+          serviceDate: '2026-11-07',
+          slot: 'MORNING',
+        }),
+      ).toEqual([]);
+      expect(
+        validationErrorPaths({
+          ...validRouteInput(),
+          serviceDate: '2026-11-07',
+          slot: 'NIGHT',
+        }),
+      ).toEqual(['slot']);
+      expect(
+        validationErrorPaths({
+          ...validRouteInput(),
+          slot: 'MORNING',
+        }),
+      ).toEqual(['serviceDate']);
     });
 
     it('requires routeNumber in the R-<nnnn>-MMYY format', () => {

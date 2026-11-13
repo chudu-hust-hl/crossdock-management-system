@@ -10,6 +10,7 @@ async function bootstrap(): Promise<void> {
   const configService = app.get(ConfigService<AppConfig, true>);
   const port = configService.get('port', { infer: true });
 
+  app.enableCors({ origin: configService.get('corsOrigin', { infer: true }) });
   setupSwagger(app);
 
   await app.listen(port);

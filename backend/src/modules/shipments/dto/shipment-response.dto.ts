@@ -1,9 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PageResponse } from '../../../common/dto/page-response.dto';
 import { TimeWindowResponse } from '../../../common/dto/time-window.dto';
 import { DeliveryPointStatus } from '../../../common/enums/delivery-point-status.enum';
 import { DeliveryPointType } from '../../../common/enums/delivery-point-type.enum';
-import { Page } from '../../../common/utils/pagination.util';
 import { ShipmentStatus } from '../enums/shipment-status.enum';
 import { DeliveryInfo } from '../schemas/delivery-info.schema';
 import { Shipment } from '../schemas/shipment.schema';
@@ -52,6 +50,13 @@ export class ShipmentResponse {
   })
   parentId!: string | null;
 
+  @ApiProperty({
+    type: [String],
+    description:
+      'ULIDs of the child shipments, in path order. Empty until they exist.',
+  })
+  childrenIds!: string[];
+
   @ApiPropertyOptional({
     example: 'Cong ty TNHH ABC',
     description: 'Set on a root shipment (booking).',
@@ -84,16 +89,27 @@ export class ShipmentResponse {
   updatedAt!: Date;
 }
 
-/** One page of `GET /shipments`. */
-export class ShipmentPageResponse extends PageResponse {
-  @ApiProperty({ type: [ShipmentResponse] })
-  items!: ShipmentResponse[];
+/**
+ * `POST /shipments/book`. The shipment, plus why routing left the pickup and
+ * drop-off unchanged. That reason is not stored and is not part of a GET response.
+ */
+export class BookShipmentResponse extends ShipmentResponse {
+  @ApiPropertyOptional({
+    description:
+      'Why routing left the original pickup and drop-off unchanged. Absent when the hubs were inserted.',
+    example: 'pickup province "Ha Noi" matches no province',
+  })
+  routingStoppedReason?: string;
 }
 
-export function toShipmentPageResponse(
-  page: Page<Shipment>,
-): ShipmentPageResponse {
-  return { ...page, items: page.items.map(toShipmentResponse) };
+export function toBookShipmentResponse(
+  shipment: Shipment,
+  routingStoppedReason?: string,
+): BookShipmentResponse {
+  return {
+    ...toShipmentResponse(shipment),
+    ...(routingStoppedReason !== undefined ? { routingStoppedReason } : {}),
+  };
 }
 
 export function toShipmentResponse(shipment: Shipment): ShipmentResponse {
@@ -101,6 +117,7 @@ export function toShipmentResponse(shipment: Shipment): ShipmentResponse {
     id: shipment.id,
     code: shipment.code,
     parentId: shipment.parentId,
+    childrenIds: shipment.childrenIds,
     customerName: shipment.customerName,
     cost: shipment.cost,
     itemIds: shipment.itemIds,

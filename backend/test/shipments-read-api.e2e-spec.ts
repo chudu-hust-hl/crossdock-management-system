@@ -9,10 +9,8 @@ import { validationPipeOptions } from '../src/config/validation.config';
 import { Item } from '../src/modules/items/schemas/item.schema';
 import { Location } from '../src/modules/locations/schemas/location.schema';
 import { Metadata } from '../src/modules/metadata/schemas/metadata.schema';
-import {
-  ShipmentPageResponse,
-  ShipmentResponse,
-} from '../src/modules/shipments/dto/shipment-response.dto';
+import { ShipmentResponse } from '../src/modules/shipments/dto/shipment-response.dto';
+import { ShipmentPageResponse } from '../src/modules/shipments/dto/shipment-summary-response.dto';
 import { Shipment } from '../src/modules/shipments/schemas/shipment.schema';
 import { ShipmentsModule } from '../src/modules/shipments/shipments.module';
 import { testDatabaseImports } from './utils/test-database';
@@ -196,7 +194,7 @@ describe('Shipments read API (integration)', () => {
       const page = await list(`?parentId=${rootId}&sortBy=code&sortOrder=asc`);
 
       expect(codes(page)).toEqual(['S-0003-1026', 'S-0004-1026']);
-      expect(page.items.every((leg) => leg.parentId === rootId)).toBe(true);
+      expect(page.items.map((leg) => leg.id)).not.toContain(rootId);
     });
 
     it('pages through the results and reports the total on every page', async () => {
@@ -327,11 +325,17 @@ describe('Shipments read API (integration)', () => {
           ],
         })
         .expect(201);
-      const { id } = booked.body as ShipmentResponse;
+      const { routingStoppedReason, ...bookedShipment } =
+        booked.body as ShipmentResponse & { routingStoppedReason?: string };
 
-      const response = await get(`/shipments/${id}`).expect(200);
+      const response = await get(`/shipments/${bookedShipment.id}`).expect(200);
 
-      expect(response.body).toEqual(booked.body);
+      // The reason is only on the booking response. The stored shipment matches otherwise.
+      expect(routingStoppedReason).toBe(
+        'pickup has no province; dropoff has no province',
+      );
+      expect(response.body).toEqual(bookedShipment);
+      expect(response.body).not.toHaveProperty('routingStoppedReason');
     });
 
     it('returns 404 for an unknown or soft-deleted shipment', async () => {

@@ -9,6 +9,8 @@ export interface AppConfig {
   nodeEnv: string;
   port: number;
   mongodbUri: string;
+  /** Browser origin allowed to call the API (CORS), e.g. the Angular dev server. */
+  corsOrigin: string;
   /** `null` when no PRICING_* variable is set; shipments cannot be booked then. */
   pricing: PricingConfig | null;
 }
@@ -38,6 +40,7 @@ export default function configuration(): AppConfig {
     nodeEnv: process.env.NODE_ENV ?? 'development',
     port,
     mongodbUri,
+    corsOrigin: process.env.CORS_ORIGIN?.trim() || 'http://localhost:4200',
     pricing: pricingConfiguration(),
   };
 }

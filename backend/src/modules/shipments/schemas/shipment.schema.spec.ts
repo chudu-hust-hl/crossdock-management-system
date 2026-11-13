@@ -64,9 +64,13 @@ describe('ShipmentSchema', () => {
       });
     });
 
-    it('references parent shipments, items, and locations by their ULID id', () => {
+    it('references parent shipments, children, items, and locations by their ULID id', () => {
       expect(ShipmentSchema.path('parentId').instance).toBe('String');
       expect(ShipmentSchema.path('parentId').options.ref).toBeUndefined();
+      expect(ShipmentSchema.path('childrenIds').options).toMatchObject({
+        type: [{ type: String, validate: ulidValidator }],
+        default: [],
+      });
       expect(ShipmentSchema.path('itemIds').options).toMatchObject({
         type: [{ type: String, validate: ulidValidator }],
       });
@@ -84,6 +88,7 @@ describe('ShipmentSchema', () => {
         validationErrorPaths({
           code: 'S-0001-1026',
           parentId: objectId,
+          childrenIds: [objectId],
           itemIds: [generateUlid(), objectId],
           deliveryInfos: [
             {
@@ -93,7 +98,12 @@ describe('ShipmentSchema', () => {
             },
           ],
         }),
-      ).toEqual(['deliveryInfos.0.locationId', 'itemIds.1', 'parentId']);
+      ).toEqual([
+        'childrenIds.0',
+        'deliveryInfos.0.locationId',
+        'itemIds.1',
+        'parentId',
+      ]);
     });
 
     it('does not define obsolete or duplicate sources of truth', () => {
@@ -103,7 +113,6 @@ describe('ShipmentSchema', () => {
         'destinationLocationId',
         'origin',
         'destination',
-        'childrenIds',
       ]) {
         expect(ShipmentSchema.path(field)).toBeUndefined();
       }
@@ -138,6 +147,7 @@ describe('ShipmentSchema', () => {
 
       expect(shipment.validateSync()).toBeUndefined();
       expect(shipment.parentId).toBeNull();
+      expect(shipment.childrenIds).toEqual([]);
       expect(shipment.itemIds).toEqual([]);
       expect(shipment.deliveryInfos).toEqual([]);
       expect(shipment.status).toBe(ShipmentStatus.CREATED);

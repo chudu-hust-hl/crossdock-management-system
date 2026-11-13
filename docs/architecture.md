@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes how the `cross-dock-management` backend is structured. Domain rules live in [`domain-model.md`](./domain-model.md).
+This document describes how the `cross-dock-management` backend and frontend are structured. Domain rules live in [`domain-model.md`](./domain-model.md).
 
 ## 1. Approach: modular monolith
 
@@ -21,7 +21,7 @@ The repository is a monorepo:
 ```text
 cross-dock-management/
 ├── backend/                    # NestJS application (npm commands run here)
-├── frontend/                   # Angular application (created later)
+├── frontend/                   # Angular application (npm commands run here), see §9
 ├── docs/                       # project and domain documentation
 ├── .cursor/rules/              # Cursor project rules
 └── docker-compose.yml          # local MongoDB
@@ -65,8 +65,10 @@ backend/src/
 └── modules/
     ├── locations/
     ├── users/
-    ├── items/                  # Item schema, CreateItemDto, ItemsService (used by booking)
-    ├── shipments/              # booking (POST /shipments/book), list and detail; ShipmentCostService
+    ├── items/                  # Item schema, CreateItemDto, UpdateItemDto, ItemsService (used by booking)
+    ├── shipments/              # booking (POST /shipments/book), list, detail, view; ShipmentCostService;
+    │                           #   ShipmentEditsService (the three booking-correction PUTs)
+    ├── routing/                # hub selection after booking; reads provinces, updates deliveryInfos
     ├── routes/
     ├── dock-tasks/
     └── metadata/               # `metadata` collection: business-code counters
@@ -88,7 +90,7 @@ Controllers, services, and DTOs are created when a feature needs them, not as em
 
 ## 3. Modules
 
-One NestJS feature module per domain collection:
+One NestJS feature module per domain collection. `RoutingModule` is the booking routing rule: it does not own a domain collection.
 
 | Module | Collection |
 | --- | --- |
@@ -99,11 +101,12 @@ One NestJS feature module per domain collection:
 | `RoutesModule` | `routes` |
 | `DockTasksModule` | `dock_tasks` |
 | `MetadataModule` | `metadata` (supporting collection: counters and changeable rules) |
+| `RoutingModule` | no domain collection of its own. Reads the existing `provinces` reference data and updates a booked shipment's `deliveryInfos` |
 
 Guidelines:
 
 - A module registers its own Mongoose models with `MongooseModule.forFeature(...)`.
-- Another module that needs this data imports the owning module and uses its **exported service**, rather than registering the same model again.
+- Another module that needs this data imports the owning module and uses its **exported service**, rather than registering the same model again. `RoutingModule` also registers the `Shipment` model so it can save `deliveryInfos` without importing `ShipmentsModule` (that import would be a cycle). Both use the same schema on the one application connection. Cross-docks are loaded through the exported `LocationsService`.
 - There is exactly one MongoDB connection, configured once at application level.
 
 ## 4. Layer responsibilities
@@ -173,7 +176,7 @@ The documentation is written with explicit `@nestjs/swagger` decorators, so it i
 - **Response bodies** are classes, not interfaces, because Swagger can only describe classes. Example: `LocationResponse`.
 - `config/swagger.config.spec.ts` generates the document without a database. It checks that every endpoint, response status, parameter, and required field is documented. When a controller is added, add it to this test.
 
-Implemented DTOs: `CreateLocationDto`, `AddressDto`, `LocationCandidateDto`, `ListLocationsQueryDto`, and the `LocationResponse` / `LocationPageResponse` mappings (`locations/dto/`); `CreateShipmentDto`, `ShipmentEndpointDto`, `ListShipmentsQueryDto`, and `ShipmentResponse` / `ShipmentPageResponse` (`shipments/dto/`); `CreateItemDto` and `DimensionsDto` (`items/dto/`); `UlidParamDto`, `PaginationQueryDto`, `PageResponse`, and `TimeWindowDto` / `TimeWindowResponse` (`common/dto/`). See [`business-workflows.md`](./business-workflows.md) for the workflows they serve.
+Implemented DTOs: `CreateLocationDto`, `AddressDto`, `LocationCandidateDto`, `ListLocationsQueryDto`, and the `LocationResponse` / `LocationPageResponse` mappings (`locations/dto/`); `CreateShipmentDto`, `ShipmentEndpointDto`, `ListShipmentsQueryDto`, `UpdateShipmentCustomerDto`, `UpdateAppointmentsDto`, `ShipmentItemParamDto`, and `ShipmentResponse` / `BookShipmentResponse` / `ShipmentSummaryResponse` / `ShipmentPageResponse` / `ShipmentViewResponse` (`shipments/dto/`); `CreateItemDto`, `UpdateItemDto`, `DimensionsDto` and `ItemResponse` (`items/dto/`); `RouteResponse` (`routes/dto/`); `UlidParamDto`, `PaginationQueryDto`, `PageResponse`, and `TimeWindowDto` / `TimeWindowResponse` (`common/dto/`). See [`business-workflows.md`](./business-workflows.md) for the workflows they serve.
 
 ## 5. Identifier strategy
 
@@ -188,6 +191,7 @@ See [`domain-model.md` §2](./domain-model.md#2-identifiers).
 ## 6. Configuration and local infrastructure
 
 - Configuration uses `@nestjs/config` with environment variables. At minimum: `NODE_ENV`, `PORT`, `MONGODB_URI`.
+- `CORS_ORIGIN` (default `http://localhost:4200`, the Angular dev server) is the one browser origin allowed to call the API; `main.ts` passes it to `app.enableCors()`.
 - `backend/.env.example` documents the variables; `backend/.env` is local only and ignored by Git. `MONGODB_URI` is required; the app fails at startup with a clear message if it is missing.
 - Local MongoDB runs with the root `docker-compose.yml` (`mongo:8.0`), exposed on `127.0.0.1:27018` (to avoid clashing with a local MongoDB on `27017`), with the named volume `cross-dock-management-mongodb-data`.
 - Default local URI: `mongodb://localhost:27018/cross_dock_management`.
@@ -206,7 +210,7 @@ Schemas and relationships are designed deliberately, one entity at a time, befor
 5. Implement the Shipment schema. *(done)*
 6. Implement the Route schema. *(done)*
 7. Implement the DockTask schema. *(done)*
-8. Add DTO validation, services, APIs, and tests incrementally. *(in progress: validation setup, the Location service and API, and shipment booking with items and cost (`POST /shipments/book`), and list/detail endpoints for Locations and Shipments are done)*
+8. Add DTO validation, services, APIs, and tests incrementally. *(in progress: validation setup, the Location service and API, shipment booking with items and cost (`POST /shipments/book`), routing of that shipment's delivery infos, list/detail endpoints for Locations and Shipments, the booking view, and the three booking-correction `PUT`s are done)*
 9. Add authentication and additional infrastructure only when needed.
 
 Each step should build, lint, and (where tests exist) pass tests before moving to the next.
@@ -215,3 +219,40 @@ Schema steps add two kinds of tests:
 
 - `src/**/<name>.schema.spec.ts` (`npm test`): schema definition and in-memory validation, no database.
 - `test/*.e2e-spec.ts` (`npm run test:e2e`): integration against MongoDB (indexes, duplicate keys, timestamps). Each file uses its own `cross_dock_management_test_<name>` database through `test/utils/test-database.ts`. Jest runs files in parallel and each file drops its database when it finishes, so two files must never share a database.
+
+## 9. Frontend
+
+The frontend is an Angular 21 application in `frontend/`. Angular 21 (LTS) is the newest major whose CLI supports the project's Node.js 22.14. It is a standalone-component app with no UI library, no Tailwind, and no Angular Material. It has no login and no form that creates records. The only writes are the three corrections on the booking detail page.
+
+```text
+frontend/src/
+├── environments/environment.ts  # apiBaseUrl (default http://localhost:3100)
+├── styles.css                  # the only stylesheet
+└── app/
+    ├── app.ts / app.html       # shell: header with navigation, <router-outlet>
+    ├── app.config.ts           # router, the one HttpClient, date format
+    ├── app.routes.ts           # one lazy route per feature: /shipments, /locations
+    ├── api/
+    │   ├── api.models.ts       # response types, mirroring the backend *Response classes
+    │   ├── api.service.ts      # ApiService: the only class calling the API; errorMessage()
+    │   └── load-state.ts       # load(): loading → loaded | error, for every page
+    ├── shared/
+    │   ├── list-query.ts       # URL query ⇄ API list query (filters, page)
+    │   └── pager.ts            # Previous / Next for both lists
+    ├── shipments/              # shipments.routes.ts, shipment-list, shipment-detail
+    └── locations/              # locations.routes.ts, location-list, location-detail
+```
+
+- **Pages:** each feature has a list (`/shipments`, `/locations`) and a detail page (`/shipments/:id`, `/locations/:id`).
+  - A list calls `GET /<feature>` with the filters from its form. The code or name in a row links to the detail page.
+  - The Locations pages call `GET /locations` and `GET /locations/:id`.
+  - The shipments list shows bookings only. It always sends `isRoot=true`, and opening it without `isRoot=true` in the URL replaces the URL with one that has it. Its filters are code, customer and status. Each row shows the code, status and "Not routed" when there is no `TRANSIT` point, then the origin → destination stores, the two appointments, and the customer, cost and items (three items, then "+N").
+  - The booking detail calls `GET /shipments/:id/view`. It shows the path, the items, and each leg with its routes. Location names link to their Location.
+  - On a `CREATED` booking it can edit the customer name, the pickup or drop-off window (the `PUT` always sends both), and one item. One editor is open at a time. Save is disabled while it runs, the page reloads the view on success, and an error is shown above the editor. A `TRANSIT` row and a route's Edit stay disabled, and every Edit is disabled on a booking that is not `CREATED`.
+- **State in the URL:** a list's filters and page are query parameters, e.g. `/shipments?isRoot=true&page=2`. Each change of the URL loads the list again, so reload and the back button keep the list. The page size is fixed at 20.
+- **Loading, empty, error:** every page shows `Loading…`, then the data, a "No … found." line, or the error. The error text is the `message` from Nest's error body (validation messages joined with `;`), or "Cannot reach the API" when there is no response.
+- **Styling:** `styles.css` is the only stylesheet; components have none. The `@schematics/angular:component` default in `angular.json` is `style: none`.
+  - `:root` variables: text, muted, background, accent, and error colours, one spacing step, and one border.
+  - No rounded corners, shadows or gradients.
+  - The accent marks only the active navigation item, the primary button, and the arrow between origin and destination in the shipments list.
+- **Commands** (in `frontend/`): `npm start` (dev server on <http://localhost:4200>), `npm run build`, `npm test` (Vitest).

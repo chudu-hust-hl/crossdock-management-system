@@ -55,6 +55,7 @@ Each integration test file uses its own database (`cross_dock_management_test_<n
 | `NODE_ENV` | `development` | Runtime environment |
 | `PORT` | `3000` | HTTP port |
 | `MONGODB_URI` | `mongodb://localhost:27018/cross_dock_management` | MongoDB connection string (required) |
+| `CORS_ORIGIN` | `http://localhost:4200` | Browser origin allowed to call the API: the Angular dev server. Default `http://localhost:4200` |
 | `PRICING_BASE_FEE` | `20000` | Booking cost: fixed fee per shipment, in VND |
 | `PRICING_FEE_PER_ITEM` | `5000` | Booking cost: fee per item, in VND |
 | `PRICING_FEE_PER_KG` | `3000` | Booking cost: fee per kg of total weight, in VND |

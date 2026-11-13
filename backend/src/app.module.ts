@@ -10,6 +10,7 @@ import { ItemsModule } from './modules/items/items.module';
 import { LocationsModule } from './modules/locations/locations.module';
 import { MetadataModule } from './modules/metadata/metadata.module';
 import { RoutesModule } from './modules/routes/routes.module';
+import { RoutingModule } from './modules/routing/routing.module';
 import { ShipmentsModule } from './modules/shipments/shipments.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -21,6 +22,7 @@ import { UsersModule } from './modules/users/users.module';
     UsersModule,
     ItemsModule,
     ShipmentsModule,
+    RoutingModule,
     RoutesModule,
     DockTasksModule,
     MetadataModule,

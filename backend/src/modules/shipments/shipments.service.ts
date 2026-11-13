@@ -8,6 +8,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model } from 'mongoose';
 import { BusinessCodeType } from '../../common/enums/business-code-type.enum';
+import { DeliveryPointStatus } from '../../common/enums/delivery-point-status.enum';
 import { DeliveryPointType } from '../../common/enums/delivery-point-type.enum';
 import { SortOrder } from '../../common/enums/sort-order.enum';
 import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
@@ -20,9 +21,14 @@ import { LocationStatus } from '../locations/enums/location-status.enum';
 import { LocationsService } from '../locations/locations.service';
 import { Location } from '../locations/schemas/location.schema';
 import { MetadataService } from '../metadata/metadata.service';
+import { RoutedChild, RoutesService } from '../routes/routes.service';
+import { RoutingResult, RoutingService } from '../routing/routing.service';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { ListShipmentsQueryDto } from './dto/list-shipments-query.dto';
 import { ShipmentEndpointDto } from './dto/shipment-endpoint.dto';
+import { ShipmentSummaryPage } from './dto/shipment-summary-response.dto';
+import { ShipmentView } from './dto/shipment-view-response.dto';
+import { ShipmentStatus } from './enums/shipment-status.enum';
 import { DeliveryInfo } from './schemas/delivery-info.schema';
 import { Shipment } from './schemas/shipment.schema';
 import { ShipmentCostService } from './shipment-cost.service';
@@ -46,17 +52,21 @@ export class ShipmentsService {
     private readonly itemsService: ItemsService,
     private readonly metadataService: MetadataService,
     private readonly costService: ShipmentCostService,
+    private readonly routingService: RoutingService,
+    private readonly routesService: RoutesService,
   ) {}
 
   /**
-   * Books a root shipment (docs/business-workflows.md §4). Every item is created by
-   * this booking; Items are never reused. MongoDB transactions are not available on
-   * the standalone server, so:
+   * Books a root shipment (docs/business-workflows.md §4) and then routes it (§5).
+   * Every item is created by this booking; Items are never reused. MongoDB
+   * transactions are not available on the standalone server, so:
    * 1. every check that writes nothing runs first;
    * 2. the writes follow, with the Shipment itself last;
    * 3. if a write fails, the writes already done by this booking are undone.
+   * Routing, child shipments, and route assignment run after that shipment exists.
+   * They are not part of the undo.
    */
-  async create(dto: CreateShipmentDto): Promise<Shipment> {
+  async create(dto: CreateShipmentDto): Promise<RoutingResult> {
     await this.checkBarcodesAreFree(dto.items);
     const cost = this.costService.calculate(dto.items);
 
@@ -65,6 +75,7 @@ export class ShipmentsService {
       createdLocationIds: [],
       createdItemIds: [],
     };
+    let shipment: Shipment;
     try {
       const pickup = await this.resolveEndpoint(dto.pickup, 'pickup', writes);
       const dropoff = await this.resolveEndpoint(
@@ -100,20 +111,21 @@ export class ShipmentsService {
         })),
       );
 
-      const shipment = await this.shipmentModel.create({
-        id: shipmentId,
-        code,
-        customerName: dto.customerName,
-        cost,
-        parentId: null,
-        itemIds: writes.createdItemIds,
-        deliveryInfos: [
-          deliveryInfo(1, pickup, DeliveryPointType.PICKUP, dto.pickup),
-          deliveryInfo(2, dropoff, DeliveryPointType.DROPOFF, dto.dropoff),
-        ],
-        metadata: dto.metadata,
-      });
-      return shipment.toObject();
+      shipment = (
+        await this.shipmentModel.create({
+          id: shipmentId,
+          code,
+          customerName: dto.customerName,
+          cost,
+          parentId: null,
+          itemIds: writes.createdItemIds,
+          deliveryInfos: [
+            deliveryInfo(1, pickup, DeliveryPointType.PICKUP, dto.pickup),
+            deliveryInfo(2, dropoff, DeliveryPointType.DROPOFF, dto.dropoff),
+          ],
+          metadata: dto.metadata,
+        })
+      ).toObject();
     } catch (error) {
       await this.undo(writes);
       if (isDuplicateKeyError(error)) {
@@ -123,6 +135,57 @@ export class ShipmentsService {
       }
       throw error;
     }
+
+    const routed = await this.routingService.route(shipment);
+    if (routed.routingStoppedReason) {
+      return routed;
+    }
+    const booked = await this.createChildShipments(routed.shipment);
+    await this.routesService.assignForBooking(booked.shipment, booked.children);
+    return { shipment: booked.shipment };
+  }
+
+  /**
+   * One child shipment per hop of the root's routed path (docs/business-workflows.md §5).
+   * `childrenIds` is written only after every child insert succeeds. Items are not created.
+   */
+  private async createChildShipments(root: Shipment): Promise<{
+    shipment: Shipment;
+    children: RoutedChild[];
+  }> {
+    const hops = hopsInPathOrder(root.deliveryInfos);
+    if (hops.length === 0) {
+      return { shipment: root, children: [] };
+    }
+
+    const codes = await this.metadataService.nextBusinessCodes(
+      BusinessCodeType.SHIPMENT,
+      new Date(),
+      hops.length,
+    );
+    const children = hops.map(([from, to], index) => ({
+      id: generateUlid(),
+      code: codes[index],
+      parentId: root.id,
+      itemIds: [...root.itemIds],
+      status: ShipmentStatus.CREATED,
+      deliveryInfos: [childPoint(1, from), childPoint(2, to)],
+    }));
+
+    await this.shipmentModel.insertMany(children, { ordered: true });
+
+    const doc = await this.shipmentModel.findOne({
+      id: root.id,
+      deletedAt: null,
+    });
+    if (!doc) {
+      throw new Error(
+        `Shipment ${root.id} was not found when its child shipments were listed`,
+      );
+    }
+    doc.childrenIds = children.map((child) => child.id);
+    await doc.save();
+    return { shipment: doc.toObject(), children };
   }
 
   findAll(query: ListShipmentsQueryDto): Promise<Page<Shipment>> {
@@ -134,6 +197,27 @@ export class ShipmentsService {
     );
   }
 
+  /**
+   * A page of shipments with the stores and Items its rows show. Two batch queries
+   * for the whole page, not one per row: the PICKUP/DROPOFF Locations and the Items.
+   */
+  async findSummaryPage(
+    query: ListShipmentsQueryDto,
+  ): Promise<ShipmentSummaryPage> {
+    const page = await this.findAll(query);
+    const locationIds = page.items.flatMap((shipment) =>
+      shipment.deliveryInfos
+        .filter((info) => info.type !== DeliveryPointType.TRANSIT)
+        .map((info) => info.locationId),
+    );
+    const itemIds = page.items.flatMap((shipment) => shipment.itemIds);
+    const [locations, items] = await Promise.all([
+      this.locationsService.findSummariesByIds(unique(locationIds)),
+      this.itemsService.findSummariesByIds(unique(itemIds)),
+    ]);
+    return { page, locations, items };
+  }
+
   async findById(id: string): Promise<Shipment> {
     const shipment = await this.shipmentModel
       .findOne({ id, deletedAt: null })
@@ -143,6 +227,57 @@ export class ShipmentsService {
       throw new NotFoundException(`Shipment ${id} not found`);
     }
     return shipment;
+  }
+
+  /** A non-deleted root shipment (booking). A child id is `404`, like an unknown id. */
+  async findRootById(id: string): Promise<Shipment> {
+    const shipment = await this.shipmentModel
+      .findOne({ id, parentId: null, deletedAt: null })
+      .lean<Shipment>()
+      .exec();
+    if (!shipment) {
+      throw new NotFoundException(`Booking ${id} not found`);
+    }
+    return shipment;
+  }
+
+  /**
+   * One booking with its Locations, Items, children and routes, in five queries by
+   * indexed fields (no populate): the root by `id`, its children by `parentId`, the
+   * Items, Locations and routes by `$in`.
+   */
+  async findView(id: string): Promise<ShipmentView> {
+    const shipment = await this.findRootById(id);
+    const [children, items, routes] = await Promise.all([
+      this.findChildren(shipment),
+      this.itemsService.findByIds(shipment.itemIds),
+      this.routesService.findForShipments(shipment.childrenIds),
+    ]);
+    const locationIds = [shipment, ...children].flatMap((s) =>
+      s.deliveryInfos.map((info) => info.locationId),
+    );
+    const locations = await this.locationsService.findByIds(
+      unique(locationIds),
+    );
+    return {
+      shipment,
+      locations,
+      items: inIdOrder(items, shipment.itemIds),
+      children,
+      routes,
+    };
+  }
+
+  /** The children listed in `childrenIds`, in that order. */
+  async findChildren(root: Shipment): Promise<Shipment[]> {
+    if (root.childrenIds.length === 0) {
+      return [];
+    }
+    const children = await this.shipmentModel
+      .find({ parentId: root.id, deletedAt: null })
+      .lean<Shipment[]>()
+      .exec();
+    return inIdOrder(children, root.childrenIds);
   }
 
   /** The MongoDB filter of a Shipment list; soft-deleted Shipments never match. */
@@ -248,6 +383,21 @@ export class ShipmentsService {
   }
 }
 
+function unique(ids: string[]): string[] {
+  return [...new Set(ids)];
+}
+
+/** The documents in the order of `ids`; an id without a document is skipped. */
+function inIdOrder<T extends { id: string }>(
+  documents: T[],
+  ids: string[],
+): T[] {
+  const byId = new Map(documents.map((document) => [document.id, document]));
+  return ids
+    .map((id) => byId.get(id))
+    .filter((document): document is T => document !== undefined);
+}
+
 function deliveryInfo(
   sequence: number,
   location: Location,
@@ -262,5 +412,44 @@ function deliveryInfo(
       from: endpoint.appointment.from,
       to: endpoint.appointment.to,
     },
+  };
+}
+
+/** Consecutive stops, in sequence order. A hop from a location to itself is skipped. */
+function hopsInPathOrder(
+  deliveryInfos: DeliveryInfo[],
+): Array<[DeliveryInfo, DeliveryInfo]> {
+  const ordered = [...deliveryInfos].sort(
+    (left, right) => left.sequence - right.sequence,
+  );
+  const hops: Array<[DeliveryInfo, DeliveryInfo]> = [];
+  for (let index = 0; index < ordered.length - 1; index += 1) {
+    const from = ordered[index];
+    const to = ordered[index + 1];
+    if (from.locationId !== to.locationId) {
+      hops.push([from, to]);
+    }
+  }
+  return hops;
+}
+
+/**
+ * One end of a child shipment. A pickup or drop-off keeps the root appointment.
+ * A transit point does not: both of its windows stay empty.
+ */
+function childPoint(sequence: number, point: DeliveryInfo): DeliveryInfo {
+  const empty = { from: null, to: null };
+  const keepsAppointment =
+    point.type === DeliveryPointType.PICKUP ||
+    point.type === DeliveryPointType.DROPOFF;
+  return {
+    sequence,
+    locationId: point.locationId,
+    type: point.type,
+    status: DeliveryPointStatus.PENDING,
+    appointment: keepsAppointment
+      ? { from: point.appointment.from, to: point.appointment.to }
+      : empty,
+    actualWindow: { from: null, to: null },
   };
 }

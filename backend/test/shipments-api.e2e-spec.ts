@@ -14,6 +14,15 @@ import { LocationStatus } from '../src/modules/locations/enums/location-status.e
 import { LocationType } from '../src/modules/locations/enums/location-type.enum';
 import { Location } from '../src/modules/locations/schemas/location.schema';
 import { Metadata } from '../src/modules/metadata/schemas/metadata.schema';
+import {
+  ROUTE_CREATED_BY,
+  ROUTE_DRIVER_NAME,
+  ROUTE_VEHICLE_PLATE,
+} from '../src/modules/routes/route-assignment.constants';
+import { RouteSlot } from '../src/modules/routes/enums/route-slot.enum';
+import { Route } from '../src/modules/routes/schemas/route.schema';
+import * as trunkSlot from '../src/modules/routes/trunk-slot';
+import { Province } from '../src/modules/routing/schemas/province.schema';
 import { ShipmentResponse } from '../src/modules/shipments/dto/shipment-response.dto';
 import { Shipment } from '../src/modules/shipments/schemas/shipment.schema';
 import { ShipmentsModule } from '../src/modules/shipments/shipments.module';
@@ -85,6 +94,8 @@ describe('Shipments API (integration)', () => {
   let locationModel: Model<Location>;
   let itemModel: Model<Item>;
   let metadataModel: Model<Metadata>;
+  let provinceModel: Model<Province>;
+  let routeModel: Model<Route>;
   let itemsService: ItemsService;
   let configService: ConfigService;
 
@@ -102,12 +113,19 @@ describe('Shipments API (integration)', () => {
     locationModel = moduleRef.get(getModelToken(Location.name));
     itemModel = moduleRef.get(getModelToken(Item.name));
     metadataModel = moduleRef.get(getModelToken(Metadata.name));
+    provinceModel = moduleRef.get(getModelToken(Province.name));
+    routeModel = moduleRef.get(getModelToken(Route.name));
     itemsService = moduleRef.get(ItemsService);
     configService = moduleRef.get(ConfigService);
     await Promise.all(
-      [shipmentModel, locationModel, itemModel, metadataModel].map((model) =>
-        model.init(),
-      ),
+      [
+        shipmentModel,
+        locationModel,
+        itemModel,
+        metadataModel,
+        provinceModel,
+        routeModel,
+      ].map((model) => model.init()),
     );
   });
 
@@ -117,6 +135,8 @@ describe('Shipments API (integration)', () => {
       locationModel.deleteMany({}),
       itemModel.deleteMany({}),
       metadataModel.deleteMany({}),
+      provinceModel.deleteMany({}),
+      routeModel.deleteMany({}),
     ]);
   });
 
@@ -575,6 +595,601 @@ describe('Shipments API (integration)', () => {
       const response = await post(bookingBody()).expect(201);
 
       expect((response.body as ShipmentResponse).code).toBe(code('S', 2));
+    });
+  });
+
+  describe('routing', () => {
+    const pickupAppointment = {
+      from: '2026-10-27T01:00:00.000Z',
+      to: '2026-10-27T03:00:00.000Z',
+    };
+    const dropoffAppointment = {
+      from: '2026-10-29T06:00:00.000Z',
+      to: '2026-10-29T10:00:00.000Z',
+    };
+
+    beforeEach(async () => {
+      await provinceModel.create([
+        {
+          id: '01',
+          name: { local: 'Hà Nội', en: 'Hanoi', slug: 'ha-noi-01' },
+        },
+        {
+          id: '79',
+          name: {
+            local: 'Hồ Chí Minh',
+            en: 'Ho Chi Minh City',
+            slug: 'ho-chi-minh-79',
+          },
+        },
+      ]);
+    });
+
+    function withProvinces(
+      pickupProvince: string,
+      dropoffProvince: string,
+      cities: { pickup?: string; dropoff?: string } = {},
+    ) {
+      const body = bookingBody();
+      const write = (
+        location: (typeof body.pickup)['location'],
+        province: string,
+        city?: string,
+      ) => {
+        const address = location.address as typeof location.address & {
+          province?: string;
+          city?: string;
+        };
+        address.province = province;
+        if (city) {
+          address.city = city;
+        }
+      };
+      write(body.pickup.location, pickupProvince, cities.pickup);
+      write(body.dropoff.location, dropoffProvince, cities.dropoff);
+      return body;
+    }
+
+    function storedPoint(
+      sequence: number,
+      locationId: string,
+      type: 'PICKUP' | 'TRANSIT' | 'DROPOFF',
+      appointment: { from: string; to: string } | null,
+    ) {
+      return {
+        sequence,
+        locationId,
+        type,
+        status: 'PENDING',
+        appointment: appointment
+          ? { from: new Date(appointment.from), to: new Date(appointment.to) }
+          : { from: null, to: null },
+        actualWindow: { from: null, to: null },
+      };
+    }
+
+    async function childrenInOrder(rootId: string): Promise<Shipment[]> {
+      const root = await shipmentModel.findOne({ id: rootId }).lean<Shipment>();
+      const children = await Promise.all(
+        root!.childrenIds.map((id) =>
+          shipmentModel.findOne({ id, deletedAt: null }).lean<Shipment>(),
+        ),
+      );
+      return children.filter((child): child is Shipment => child != null);
+    }
+
+    /** Ids of the shipments whose parentId is this root, for the consistency check. */
+    async function listedChildren(rootId: string): Promise<string[]> {
+      const children = await shipmentModel
+        .find({ parentId: rootId, deletedAt: null })
+        .lean<Shipment[]>();
+      return children.map((child) => child.id).sort();
+    }
+
+    async function crossDock(
+      name: string,
+      province: string,
+      status: LocationStatus = LocationStatus.ACTIVE,
+    ) {
+      return locationModel.create({
+        name,
+        type: LocationType.CROSS_DOCK,
+        status,
+        address: {
+          addressLine1: `1 ${name}`,
+          postalCode: '000000',
+          province,
+        },
+      });
+    }
+
+    it('inserts one ACTIVE cross-dock per province when address.province equals name.en', async () => {
+      const hanoiDock = await crossDock('Hanoi Cross-Dock', 'Hanoi');
+      await crossDock('Hanoi Closed Dock', 'Hanoi', LocationStatus.INACTIVE);
+      const hcmcDock = await crossDock('HCMC Cross-Dock', 'Ho Chi Minh City');
+      await locationModel.create({
+        name: 'HCMC Deleted Dock',
+        type: LocationType.CROSS_DOCK,
+        address: {
+          addressLine1: '2 Deleted',
+          postalCode: '000001',
+          province: 'Ho Chi Minh City',
+        },
+        deletedAt: new Date(),
+      });
+
+      const response = await post(
+        withProvinces('Hanoi', 'Ho Chi Minh City'),
+      ).expect(201);
+      const shipment = response.body as ShipmentResponse;
+
+      expect(response.body).not.toHaveProperty('routingStoppedReason');
+      expect(shipment).toMatchObject({ parentId: null, status: 'CREATED' });
+      expect(shipment.deliveryInfos).toEqual([
+        {
+          sequence: 1,
+          locationId: (await findStore('Store A'))!.id,
+          type: 'PICKUP',
+          appointment: pickupAppointment,
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+        {
+          sequence: 2,
+          locationId: hanoiDock.toObject().id,
+          type: 'TRANSIT',
+          appointment: { from: null, to: null },
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+        {
+          sequence: 3,
+          locationId: hcmcDock.toObject().id,
+          type: 'TRANSIT',
+          appointment: { from: null, to: null },
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+        {
+          sequence: 4,
+          locationId: (await findStore('Store B'))!.id,
+          type: 'DROPOFF',
+          appointment: dropoffAppointment,
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+      ]);
+
+      const stored = await shipmentModel
+        .findOne({ id: shipment.id })
+        .lean<Shipment>();
+      expect(stored!.deliveryInfos.map((info) => info.sequence)).toEqual([
+        1, 2, 3, 4,
+      ]);
+      expect(stored!.itemIds).toEqual(shipment.itemIds);
+
+      const children = await childrenInOrder(shipment.id);
+      expect(shipment.childrenIds).toEqual(children.map((child) => child.id));
+      expect(children.map((child) => child.code)).toEqual([
+        code('S', 2),
+        code('S', 3),
+        code('S', 4),
+      ]);
+      for (const child of children) {
+        expect(child).toMatchObject({
+          parentId: shipment.id,
+          itemIds: shipment.itemIds,
+          status: 'CREATED',
+          childrenIds: [],
+        });
+        expect(child.customerName).toBeUndefined();
+        expect(child.cost).toBeUndefined();
+      }
+      const [storeToHub, hubToHub, hubToStore] = children;
+      expect(storeToHub.deliveryInfos).toEqual([
+        storedPoint(
+          1,
+          (await findStore('Store A'))!.id,
+          'PICKUP',
+          pickupAppointment,
+        ),
+        storedPoint(2, hanoiDock.toObject().id, 'TRANSIT', null),
+      ]);
+      expect(hubToHub.deliveryInfos).toEqual([
+        storedPoint(1, hanoiDock.toObject().id, 'TRANSIT', null),
+        storedPoint(2, hcmcDock.toObject().id, 'TRANSIT', null),
+      ]);
+      expect(hubToStore.deliveryInfos).toEqual([
+        storedPoint(1, hcmcDock.toObject().id, 'TRANSIT', null),
+        storedPoint(
+          2,
+          (await findStore('Store B'))!.id,
+          'DROPOFF',
+          dropoffAppointment,
+        ),
+      ]);
+      expect(await listedChildren(shipment.id)).toEqual(
+        [...shipment.childrenIds].sort(),
+      );
+      expect(await shipmentModel.countDocuments()).toBe(4);
+      expect(await itemModel.countDocuments()).toBe(2);
+      for (const itemId of shipment.itemIds) {
+        expect(await findItem(itemId)).toMatchObject({
+          currentShipmentId: shipment.id,
+        });
+      }
+    });
+
+    it('inserts the shared hub once when both stores resolve to the same province', async () => {
+      const hub = await crossDock('Hanoi Cross-Dock', 'Hanoi');
+
+      const response = await post(withProvinces('Hanoi', 'Hà Nội')).expect(201);
+      const shipment = response.body as ShipmentResponse;
+
+      expect(response.body).not.toHaveProperty('routingStoppedReason');
+      expect(shipment.deliveryInfos).toEqual([
+        {
+          sequence: 1,
+          locationId: (await findStore('Store A'))!.id,
+          type: 'PICKUP',
+          appointment: pickupAppointment,
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+        {
+          sequence: 2,
+          locationId: hub.toObject().id,
+          type: 'TRANSIT',
+          appointment: { from: null, to: null },
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+        {
+          sequence: 3,
+          locationId: (await findStore('Store B'))!.id,
+          type: 'DROPOFF',
+          appointment: dropoffAppointment,
+          actualWindow: { from: null, to: null },
+          status: 'PENDING',
+        },
+      ]);
+
+      const children = await childrenInOrder(shipment.id);
+      expect(children).toHaveLength(2);
+      expect(shipment.childrenIds).toEqual(children.map((child) => child.id));
+      expect(children.map((child) => child.code)).toEqual([
+        code('S', 2),
+        code('S', 3),
+      ]);
+      expect(children[0].deliveryInfos).toEqual([
+        storedPoint(
+          1,
+          (await findStore('Store A'))!.id,
+          'PICKUP',
+          pickupAppointment,
+        ),
+        storedPoint(2, hub.toObject().id, 'TRANSIT', null),
+      ]);
+      expect(children[1].deliveryInfos).toEqual([
+        storedPoint(1, hub.toObject().id, 'TRANSIT', null),
+        storedPoint(
+          2,
+          (await findStore('Store B'))!.id,
+          'DROPOFF',
+          dropoffAppointment,
+        ),
+      ]);
+      expect(children[0].parentId).toBe(shipment.id);
+      expect(children[1].parentId).toBe(shipment.id);
+      expect(await listedChildren(shipment.id)).toEqual(
+        [...shipment.childrenIds].sort(),
+      );
+      expect(await shipmentModel.countDocuments()).toBe(3);
+      expect(await itemModel.countDocuments()).toBe(2);
+    });
+
+    it('leaves the two delivery infos in place when the province string matches nothing', async () => {
+      const hanoiDock = await crossDock('Hanoi Cross-Dock', 'Hanoi');
+      const hcmcDock = await crossDock('HCMC Cross-Dock', 'Ho Chi Minh City');
+
+      const response = await post(
+        withProvinces('Ha Noi', 'Ha Noi', {
+          pickup: 'Hanoi',
+          dropoff: 'Ho Chi Minh City',
+        }),
+      ).expect(201);
+      const shipment = response.body as ShipmentResponse;
+      const pickup = await findStore('Store A');
+      const dropoff = await findStore('Store B');
+
+      expect(shipment).toMatchObject({ parentId: null, status: 'CREATED' });
+      expect(
+        (response.body as { routingStoppedReason: string })
+          .routingStoppedReason,
+      ).toBe(
+        'pickup province "Ha Noi" matches no province; dropoff province "Ha Noi" matches no province',
+      );
+      expect(shipment.deliveryInfos).toEqual([
+        expect.objectContaining({
+          sequence: 1,
+          locationId: pickup!.id,
+          type: 'PICKUP',
+          appointment: pickupAppointment,
+        }),
+        expect.objectContaining({
+          sequence: 2,
+          locationId: dropoff!.id,
+          type: 'DROPOFF',
+          appointment: dropoffAppointment,
+        }),
+      ]);
+      const locationIds = shipment.deliveryInfos.map((info) => info.locationId);
+      expect(locationIds).not.toContain(hanoiDock.toObject().id);
+      expect(locationIds).not.toContain(hcmcDock.toObject().id);
+      expect(shipment.childrenIds).toEqual([]);
+      expect(
+        await shipmentModel.countDocuments({ parentId: shipment.id }),
+      ).toBe(0);
+      expect(await shipmentModel.countDocuments()).toBe(1);
+      expect(await itemModel.countDocuments()).toBe(2);
+      expect(pickup).not.toBeNull();
+      expect(dropoff).not.toBeNull();
+    });
+
+    describe('route assignment', () => {
+      const morning = new Date('2026-11-07T02:00:00.000Z');
+      const noon = new Date('2026-11-07T05:00:00.000Z');
+      const morningWindow = {
+        from: new Date('2026-11-07T01:00:00.000Z'),
+        to: new Date('2026-11-07T05:00:00.000Z'),
+      };
+      const eveningWindow = {
+        from: new Date('2026-11-07T11:00:00.000Z'),
+        to: new Date('2026-11-07T15:00:00.000Z'),
+      };
+
+      function bookAt(when: Date) {
+        jest.spyOn(trunkSlot, 'bookingNow').mockReturnValue(when);
+      }
+
+      function assignedRoutes() {
+        return routeModel
+          .find({ deletedAt: null })
+          .sort({ routeNumber: 1 })
+          .lean<Route[]>()
+          .exec();
+      }
+
+      function expectPlaceholders(routes: Route[]) {
+        for (const route of routes) {
+          expect(route.driverName).toBe(ROUTE_DRIVER_NAME);
+          expect(route.vehiclePlate).toBe(ROUTE_VEHICLE_PLATE);
+          expect(route.createdBy).toBe(ROUTE_CREATED_BY);
+          expect(route.status).toBe('PLANNED');
+          const carried = new Set(route.shipmentIds);
+          for (const stop of route.stops) {
+            expect(stop.shipmentIds.every((id) => carried.has(id))).toBe(true);
+          }
+          expect(
+            route.stops.find((stop) => stop.sequence === 1)?.locationId,
+          ).toBe(route.fromLocationId);
+          expect(
+            route.stops.find((stop) => stop.sequence === 2)?.locationId,
+          ).toBe(route.toLocationId);
+        }
+      }
+
+      async function itemSnapshots(child: Shipment) {
+        const items = await itemModel
+          .find({ id: { $in: child.itemIds } })
+          .lean<Item[]>();
+        const byId = new Map(items.map((item) => [item.id, item]));
+        return child.itemIds.map((id) => {
+          const item = byId.get(id)!;
+          return {
+            itemId: item.id,
+            shipmentId: child.id,
+            itemCode: item.itemCode,
+            barcode: item.barcode,
+            ...(item.description ? { description: item.description } : {}),
+            itemUnit: item.itemUnit,
+            weight: item.weight,
+            weightUnit: item.weightUnit,
+          };
+        });
+      }
+
+      function bookingBetween(
+        pickupName: string,
+        dropoffName: string,
+        barcodePrefix: string,
+      ) {
+        const body = withProvinces('Hanoi', 'Ho Chi Minh City');
+        body.pickup.location.name = pickupName;
+        body.pickup.location.contactName = pickupName;
+        body.dropoff.location.name = dropoffName;
+        body.dropoff.location.contactName = dropoffName;
+        body.items = [
+          newItem(`${barcodePrefix}-1`, { description: 'Carton of books' }),
+          newItem(`${barcodePrefix}-2`, { itemUnit: 'PALLET', weight: 1 }),
+        ];
+        return body;
+      }
+
+      it('creates two store-dock routes and one morning dock-dock route before noon', async () => {
+        bookAt(morning);
+        const hanoiDock = await crossDock('Hanoi Cross-Dock', 'Hanoi');
+        const hcmcDock = await crossDock('HCMC Cross-Dock', 'Ho Chi Minh City');
+
+        const response = await post(
+          withProvinces('Hanoi', 'Ho Chi Minh City'),
+        ).expect(201);
+        const shipment = response.body as ShipmentResponse;
+        const [storeToHub, hubToHub, hubToStore] = await childrenInOrder(
+          shipment.id,
+        );
+        const routes = await assignedRoutes();
+        const dedicated = routes.filter((route) => route.slot == null);
+        const [trunk] = routes.filter((route) => route.slot != null);
+
+        expect(dedicated).toHaveLength(2);
+        expect(dedicated.map((route) => route.shipmentIds)).toEqual([
+          [storeToHub.id],
+          [hubToStore.id],
+        ]);
+        expect(dedicated[0].appointment).toEqual({
+          from: new Date(pickupAppointment.from),
+          to: new Date(pickupAppointment.to),
+        });
+        expect(dedicated[1].appointment).toEqual({
+          from: new Date(dropoffAppointment.from),
+          to: new Date(dropoffAppointment.to),
+        });
+        expect(dedicated[0].serviceDate).toBeUndefined();
+        expect(dedicated[1].slot).toBeUndefined();
+        expect(dedicated[0].stops.map((stop) => stop.type)).toEqual([
+          'PICKUP',
+          'TRANSIT',
+        ]);
+        expect(dedicated[1].stops.map((stop) => stop.type)).toEqual([
+          'TRANSIT',
+          'DROPOFF',
+        ]);
+
+        expect(trunk).toMatchObject({
+          slot: 'MORNING',
+          serviceDate: '2026-11-07',
+          fromLocationId: hanoiDock.toObject().id,
+          toLocationId: hcmcDock.toObject().id,
+          shipmentIds: [hubToHub.id],
+          appointment: morningWindow,
+          status: 'PLANNED',
+        });
+        expect(trunk.stops.map((stop) => stop.type)).toEqual([
+          'TRANSIT',
+          'TRANSIT',
+        ]);
+        expect(trunk.stops.map((stop) => stop.shipmentIds)).toEqual([
+          [hubToHub.id],
+          [hubToHub.id],
+        ]);
+        expect(trunk.items).toEqual(await itemSnapshots(hubToHub));
+        expect(
+          trunk.items.every(
+            (item) => !('status' in item) && !('currentLocationId' in item),
+          ),
+        ).toBe(true);
+        expectPlaceholders(routes);
+        expect(routes.flatMap((route) => route.shipmentIds)).not.toContain(
+          shipment.id,
+        );
+        for (const itemId of shipment.itemIds) {
+          expect(await findItem(itemId)).toMatchObject({
+            currentShipmentId: shipment.id,
+          });
+        }
+      });
+
+      it('appends a second morning booking onto the same dock-dock route', async () => {
+        bookAt(morning);
+        const hanoiDock = await crossDock('Hanoi Cross-Dock', 'Hanoi');
+        const hcmcDock = await crossDock('HCMC Cross-Dock', 'Ho Chi Minh City');
+
+        const first = (
+          await post(bookingBetween('Store A', 'Store B', 'BC-A')).expect(201)
+        ).body as ShipmentResponse;
+        const second = (
+          await post(bookingBetween('Store C', 'Store D', 'BC-B')).expect(201)
+        ).body as ShipmentResponse;
+        const firstHub = (await childrenInOrder(first.id))[1];
+        const secondHub = (await childrenInOrder(second.id))[1];
+        const routes = await assignedRoutes();
+        const lane = routes.filter(
+          (route) =>
+            route.fromLocationId === hanoiDock.toObject().id &&
+            route.toLocationId === hcmcDock.toObject().id &&
+            route.serviceDate === '2026-11-07' &&
+            route.slot === RouteSlot.MORNING,
+        );
+
+        expect(lane).toHaveLength(1);
+        expect(lane[0].shipmentIds).toEqual([firstHub.id, secondHub.id]);
+        expect(lane[0].stops.map((stop) => stop.shipmentIds)).toEqual([
+          [firstHub.id, secondHub.id],
+          [firstHub.id, secondHub.id],
+        ]);
+        expect(lane[0].items).toEqual([
+          ...(await itemSnapshots(firstHub)),
+          ...(await itemSnapshots(secondHub)),
+        ]);
+        expect(routes.filter((route) => route.slot == null)).toHaveLength(4);
+        expect(routes).toHaveLength(5);
+        expectPlaceholders(routes);
+      });
+
+      it('uses the evening route from 12:00 Vietnam time', async () => {
+        bookAt(noon);
+        await crossDock('Hanoi Cross-Dock', 'Hanoi');
+        await crossDock('HCMC Cross-Dock', 'Ho Chi Minh City');
+
+        const shipment = (
+          await post(withProvinces('Hanoi', 'Ho Chi Minh City')).expect(201)
+        ).body as ShipmentResponse;
+        const hub = (await childrenInOrder(shipment.id))[1];
+        const routes = await assignedRoutes();
+        const evening = routes.filter(
+          (route) => route.slot === RouteSlot.EVENING,
+        );
+        const morningRoutes = routes.filter(
+          (route) => route.slot === RouteSlot.MORNING,
+        );
+
+        expect(morningRoutes).toHaveLength(0);
+        expect(evening).toHaveLength(1);
+        expect(evening[0]).toMatchObject({
+          serviceDate: '2026-11-07',
+          shipmentIds: [hub.id],
+          appointment: eveningWindow,
+        });
+        expect(routes.filter((route) => route.slot == null)).toHaveLength(2);
+        expectPlaceholders(routes);
+      });
+
+      it('creates only the two store-dock routes when both stores share a province', async () => {
+        await crossDock('Hanoi Cross-Dock', 'Hanoi');
+
+        const shipment = (
+          await post(withProvinces('Hanoi', 'Hà Nội')).expect(201)
+        ).body as ShipmentResponse;
+        const children = await childrenInOrder(shipment.id);
+        const routes = await assignedRoutes();
+
+        expect(children).toHaveLength(2);
+        expect(routes).toHaveLength(2);
+        expect(routes.filter((route) => route.slot != null)).toHaveLength(0);
+        expect(routes.map((route) => route.shipmentIds)).toEqual(
+          children.map((child) => [child.id]),
+        );
+        expectPlaceholders(routes);
+      });
+
+      it('creates no route when routing stops', async () => {
+        await crossDock('Hanoi Cross-Dock', 'Hanoi');
+        await crossDock('HCMC Cross-Dock', 'Ho Chi Minh City');
+
+        const response = await post(
+          withProvinces('Ha Noi', 'Ha Noi', {
+            pickup: 'Hanoi',
+            dropoff: 'Ho Chi Minh City',
+          }),
+        ).expect(201);
+
+        expect(response.body.routingStoppedReason).toBe(
+          'pickup province "Ha Noi" matches no province; dropoff province "Ha Noi" matches no province',
+        );
+        expect(response.body.childrenIds).toEqual([]);
+        expect(await routeModel.countDocuments()).toBe(0);
+      });
     });
   });
 });

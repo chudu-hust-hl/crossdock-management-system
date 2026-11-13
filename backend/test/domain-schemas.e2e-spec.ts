@@ -174,6 +174,10 @@ describe('Domain schemas (integration)', () => {
         { key: { routeNumber: 1 }, unique: true },
         { key: { shipmentIds: 1 }, unique: false },
         { key: { status: 1, 'appointment.from': 1 }, unique: false },
+        {
+          key: { fromLocationId: 1, toLocationId: 1, serviceDate: 1, slot: 1 },
+          unique: true,
+        },
       ],
     ],
     [
@@ -252,8 +256,22 @@ describe('Domain schemas (integration)', () => {
     [
       'Route.routeNumber',
       () => routeModel,
-      { routeNumber: 'R-0100-1026', createdBy: generateUlid() },
-      { routeNumber: 'R-0100-1026', createdBy: generateUlid() },
+      {
+        routeNumber: 'R-0100-1026',
+        createdBy: generateUlid(),
+        fromLocationId: generateUlid(),
+        toLocationId: generateUlid(),
+        driverName: 'Nguyen Van Tai',
+        vehiclePlate: '29A-000.01',
+      },
+      {
+        routeNumber: 'R-0100-1026',
+        createdBy: generateUlid(),
+        fromLocationId: generateUlid(),
+        toLocationId: generateUlid(),
+        driverName: 'Nguyen Van Tai',
+        vehiclePlate: '29A-000.01',
+      },
     ],
     [
       'DockTask.taskNumber',

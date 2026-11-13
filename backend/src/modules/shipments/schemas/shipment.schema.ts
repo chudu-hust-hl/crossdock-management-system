@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema } from 'mongoose';
 import { SHIPMENT_CODE_PATTERN } from '../../../common/constants/business-code-patterns';
@@ -11,8 +10,9 @@ export type ShipmentDocument = HydratedDocument<Shipment>;
 
 /**
  * One collection for root shipments (`parentId: null`) and their segments.
- * `parentId` is the only stored parent-child link; segments are found with
- * `find({ parentId })`. Locations live in `deliveryInfos`, not in origin/destination fields.
+ * `parentId` on a child and `childrenIds` on the parent record the same link:
+ * `childrenIds` lists those children in path order. Locations live in
+ * `deliveryInfos`, not in origin/destination fields.
  */
 @Schema({ collection: 'shipments', timestamps: true })
 export class Shipment {
@@ -53,6 +53,13 @@ export class Shipment {
     ],
   })
   parentId!: string | null;
+
+  /**
+   * ULID `id`s of the child shipments, in path order.
+   * Empty until those children have all been inserted.
+   */
+  @Prop({ type: [{ type: String, validate: ulidValidator }], default: [] })
+  childrenIds!: string[];
 
   /** Who booked the shipment. Required on a root shipment; segments have none. */
   @Prop({

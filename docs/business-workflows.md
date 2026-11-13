@@ -4,9 +4,8 @@ This document records business processes that span several collections: how Loca
 
 **Status:**
 - The Location API and the Location reuse rule are implemented (§2, §6).
-- Shipment booking (shipment, items, cost) is implemented (§4, §7).
+- Shipment booking (shipment, items, cost), routing, child shipments, and route assignment of a routed booking are implemented (§4, §5, §7).
 - Listing (filtered, sorted, paginated) and detail lookup of Locations and Shipments are implemented (§6, §7).
-- Routing is not implemented yet (§5).
 
 ## 1. Location creation sources
 
@@ -86,7 +85,7 @@ Booking creates a root Shipment together with its Items, in one request (`POST /
       "name": "Store A",
       "contactName": "Nguyen Van A",
       "contactPhone": "0901234567",
-      "address": { "addressLine1": "1 Dai Co Viet", "city": "Hanoi", "postalCode": "100000" }
+      "address": { "addressLine1": "1 Dai Co Viet", "city": "Hanoi", "province": "Hanoi", "postalCode": "100000" }
     },
     "appointment": { "from": "2026-10-27T08:00:00+07:00", "to": "2026-10-27T10:00:00+07:00" }
   },
@@ -94,7 +93,7 @@ Booking creates a root Shipment together with its Items, in one request (`POST /
     "location": {
       "name": "Store B",
       "contactName": "Tran Thi B",
-      "address": { "addressLine1": "12 Le Loi", "city": "Ho Chi Minh City", "postalCode": "700000" }
+      "address": { "addressLine1": "12 Le Loi", "city": "Ho Chi Minh City", "province": "Ho Chi Minh City", "postalCode": "700000" }
     },
     "appointment": { "from": "2026-10-29T13:00:00+07:00", "to": "2026-10-29T17:00:00+07:00" }
   },
@@ -148,7 +147,9 @@ Booking creates a root Shipment together with its Items, in one request (`POST /
    - It is a root shipment (`parentId: null`) with the default status `CREATED`, the `customerName` and the calculated `cost`.
    - Its `itemIds` are the ULIDs of the Items created in step 7. The `deliveryInfos` reference the resolved Locations by their ULID `id`s.
    - It has two delivery infos: the pickup (`sequence: 1`, `PICKUP`) and the drop-off (`sequence: 2`, `DROPOFF`). Each gets its appointment, an empty `actualWindow`, and status `PENDING`.
-9. **Routing** (§5) through suitable cross-docks is a separate service, built later. Nothing is routed at booking. The Items created here are the ones routing and planning will move: each leg (child shipment) references the same Item ULIDs, and no Item is ever created again for a leg.
+9. **Route the shipment** (§5) immediately, in the same request, once the root Shipment from step 8 exists. `RoutingService` inserts the cross-dock hubs into that shipment's `deliveryInfos` and saves it. The pickup and the drop-off stay, including the appointments from the request. No Item is created or copied. If routing cannot choose the hubs, the two delivery infos stay as booked, the root stays `CREATED` with `childrenIds: []`, and the response includes `routingStoppedReason`. Routing does not take part in the undo in §4.4.
+10. **Create the child shipments** (§5) in the same request, after step 9 has written the hubs. One separate function creates them from the root. It copies `itemIds` and, where the root has an appointment for that end, the appointment. Each child stores `parentId`. The root's `childrenIds` is then set to those children in path order. If step 9 did not route, this step writes nothing. It does not take part in the undo in §4.4.
+11. **Assign a route to each child shipment** (§5) in the same request, after step 10. A store–dock leg gets its own route. A dock–dock leg joins that day's morning or evening route for that direction. If step 10 created no children, this step writes nothing. It does not take part in the undo in §4.4. DockTasks are not created here.
 
 ### 4.3 Cost
 
@@ -173,6 +174,9 @@ Booking writes to three collections (`locations`, `items`, `shipments`) and shou
 
 - **Checks first:** the barcode check (step 2) and the cost (step 3) write nothing and run before any write. Most rejected requests therefore change nothing.
 - **Shipment last:** the Shipment is the final write. A Shipment that exists is always complete; it never references missing Items.
+- **Routing is outside the undo.** Step 9 runs only after the Shipment exists. Choosing no hubs writes nothing. A failure while saving the routed `deliveryInfos` leaves the booked root, its Items, and its stores in place.
+- **Child shipments are outside the undo.** Step 10 runs only after routing. If a child insert fails, `childrenIds` stays `[]`. The root, its `deliveryInfos`, its Items, and its stores stay.
+- **Route assignment is outside the undo.** Step 11 runs only after the children exist. A failure leaves the booked root and its children in place and does not delete a trunk route other shipments already share.
 - **Undo on failure:** if a step from 4 to 8 fails, the service undoes what this booking wrote, then reports the original error:
   - The Items it created are removed. This is a **hard delete**, an explicit exception to soft delete: the Items never belonged to a booked Shipment, and their barcodes must become free again for a retry.
   - Each `STORE` it created is hard-deleted too, unless another shipment or item already references it (a concurrent booking may have reused it).
@@ -185,26 +189,63 @@ Booking writes to three collections (`locations`, `items`, `shipments`) and shou
   - **Failed undo:** a failed undo step is logged and does not stop the other undo steps.
   - With a replica set, the same steps could run in one MongoDB transaction, which would remove these limitations.
 
-## 5. Routing (future service)
+## 5. Routing
 
-Routing decides how a Shipment travels from its pickup to its drop-off through one or more suitable `CROSS_DOCK` Locations.
+Routing runs in the same request as booking, immediately after the root Shipment has been created (§4.2, step 9). `RoutingService` (`backend/src/modules/routing/routing.service.ts`) inserts the cross-dock hubs into that shipment's `deliveryInfos` and saves the shipment. The commercial pickup store **A** and drop-off store **B** stay. Routing does not create child shipments, Routes, or DockTasks, and it does not create or copy Items. Child shipments are the next step in the same request (§4.2, step 10), in `ShipmentsService`, not in `RoutingService`.
 
-Example: pickup **A** and drop-off **B** are `STORE` Locations; **C1**, **C2**, and **C3** are `CROSS_DOCK` Locations. Possible outcomes are:
+Shipments in this project are large freight (boxes, pallets, and the other `itemUnit` values), so each booking goes through one cross-dock in the pickup province and one in the drop-off province. There is no distance or "nearest hub" calculation.
 
-- A → C1 → C2 → B
-- A → C3 → B
+**Reference data already in MongoDB** (read only; booking and routing do not write it):
 
-The example shows possible results, not an algorithm. A route is not limited to any fixed number of cross-docks.
+| Collection | Contents |
+| --- | --- |
+| `provinces` | 34 provinces and centrally governed cities (level 1). `id` is the province code (`01` is Hà Nội). `name.local`, `name.en`, and `name.slug` are the names used for matching. The read-only model is `Province` in `routing/schemas/province.schema.ts`. |
+| `city` | 3321 communes and wards (level 2). Each document's `parent.id` is a `provinces.id`. Routing does not read this collection. |
 
-**Inputs (agreed):** whether a cross-dock is suitable is decided from postal-code ranges, distances, and relationships between postal codes. That data will be kept in the approved `metadata` collection. None of it exists yet, and none may be invented.
+**Resolving a store to a province.** `address.province` on a Location is free text, and it may be omitted. Routing compares that string, and nothing else, with a province document:
 
-**How legs map to Routes (agreed):**
+1. Normalize whitespace the same way as the store identity (§2). The comparison is case-insensitive.
+2. A match is an exact equality with `name.local`, `name.en`, or the slug without its trailing `-<id>` (`ha-noi-01` is compared as `ha-noi`).
+3. Diacritics stay significant, as in §2. `Hanoi` matches `name.en`. `Hà Nội` matches `name.local`. `Ha Noi` matches neither.
 
-- Each hop of the journey is a leg, i.e. a child shipment.
-- A leg between a `STORE` and a `CROSS_DOCK` (pickup or final delivery) gets **its own Route**.
-- A leg between two `CROSS_DOCK`s shares a Route with other shipments: one Route carries many shipments between docks.
+This is the happy case: the text entered for the store is one of those three names. No fuzzy match, no postal-code lookup, and no fallback from `address.city` or from `city`. If `address.province` is empty or matches no province, or matches more than one, that end has no province.
 
-Out of scope until the routing task: the algorithm, distance calculation, optimization strategy, and route assignment.
+**Choosing the hubs.** A' is the cross-dock for A's province and B' is the cross-dock for B's province. A candidate is an `ACTIVE`, non-deleted Location with `type: CROSS_DOCK` whose own `address.province` resolves to that same province document. The province is usable only when that search returns exactly one Location. Zero or several candidates is not a choice the service may guess.
+
+**Path**, written onto the root shipment's `deliveryInfos`. Sequences are `1..n` with no gaps. The pickup keeps the appointment from the request. The drop-off keeps the appointment from the request. A `TRANSIT` point has the hub's `locationId`, status `PENDING`, and an empty `actualWindow`. Its `appointment` is the empty window `{ from: null, to: null }`; routing does not invent a time for the hub.
+
+- Different provinces, both usable: **A (PICKUP) → A' (TRANSIT) → B' (TRANSIT) → B (DROPOFF)**. Sequences 1..4.
+- The same province, and that province is usable: **A (PICKUP) → A' (TRANSIT) → B (DROPOFF)**. The hub is inserted once.
+- Either end has no province, or a province has no single cross-dock: the original two delivery infos stay unchanged. `POST /shipments/book` still returns `201` with the root Shipment (`CREATED`). The response includes `routingStoppedReason`. Routing writes nothing in this case, and it does not undo the booking, its Items, or its stores.
+
+A failure while saving the updated `deliveryInfos` does not undo the booked root, its Items, or its stores (§4.4).
+
+**Child shipments.** After the hubs are on the root, `ShipmentsService.createChildShipments()` creates one child shipment per hop. A child uses the same shipment shape, but it is not a copy of the root: no `customerName` and no `cost`. It has its own `code` (`S-<nnnn>-MMYY`), `parentId` set to the root, `status: CREATED`, and the root's `itemIds` (the same Item ULIDs, not new Items). `childrenIds` is set only after every insert has succeeded.
+
+Each child has exactly two `deliveryInfos`, `sequence` 1 then 2, status `PENDING`, and an empty `actualWindow`:
+
+| Hop | Ends | `type` of the two points | Appointment |
+| --- | --- | --- | --- |
+| A → A' | store, then its hub | `PICKUP`, `TRANSIT` | Point 1 copies the root pickup appointment. Point 2 is empty. |
+| A' → B' | the two hubs | `TRANSIT`, `TRANSIT` | Both empty. |
+| B' → B | the drop-off hub, then the store | `TRANSIT`, `DROPOFF` | Point 1 is empty. Point 2 copies the root drop-off appointment. |
+
+Different provinces produce those three children, in that order. The same province produces two, A → A' and A' → B, and does not create a hop from a hub to itself. `childrenIds` on the root is those ids in the same order. A child does not appear in `childrenIds` without `parentId` pointing back, and a child is not left without being listed.
+
+If routing stopped, no child is created and `childrenIds` stays `[]`. A failure while creating a child does not undo the root, its routed `deliveryInfos`, its Items, or its stores. `currentShipmentId` on each Item stays the root.
+
+**Assigning routes.** After the children exist, `RoutesService.assignForBooking()` attaches each child to a route. A child that is already listed on a non-deleted route is skipped. The root shipment is not itself placed on a route. No DockTask is created.
+
+A route is the trip that will move the items of one or more child shipments from one Location to the next. Scanning later reads the route, not a join back to Item, so each route stores an `items` snapshot taken at assignment. The snapshot fields are `itemId`, `shipmentId` (the child), `itemCode`, `barcode`, `description` when the Item has one, `itemUnit`, `weight`, and `weightUnit`. It does not copy `status` or `currentLocationId`. Those stay on the Item. A scan does not change the snapshot. A booking correction of the Item (§7.2) rewrites `description`, `itemUnit`, `weight` and `weightUnit` in it. `shipmentIds` remains the list of child shipments on the route.
+
+`driverName` and `vehiclePlate` are plain text. Until dispatch exists, every new route uses the fixed placeholders `Nguyen Van Tai` and `29A-000.01`. `createdBy` stays a required ULID. Until users exist, every new route uses the fixed placeholder `01ARZ3NDEKTSV4RRFFQ69G5FAV`. These three constants live in one file. They are not looked up from `users`.
+
+Two kinds of route:
+
+- **Store and dock.** A child whose ends are a `STORE` and a `CROSS_DOCK` (A → A', or B' → B) gets a new route that carries only that child. Its two stops are that child's two `deliveryInfos`. The appointment is the store end's appointment (the pickup appointment on A → A', the drop-off appointment on B' → B). A later direct store-to-store child, if routing could not choose hubs, uses this same dedicated route. That case is not built in this step.
+- **Dock and dock.** A child whose ends are both `CROSS_DOCK` (A' → B') joins one shared route per direction, per Vietnam calendar day, per slot. The opposite direction is a different route. The key is the origin dock, the destination dock, `serviceDate` (`YYYY-MM-DD` in Vietnam time, UTC+7), and `slot`. `MORNING` has appointment 08:00–12:00 that day. `EVENING` has 18:00–22:00. A booking placed before 12:00 uses that day's morning route. A booking placed from 12:00 uses that day's evening route. The service looks for a non-deleted route with that key and status `PLANNED`. If it finds one, it appends the child to `shipmentIds`, to both stops' `shipmentIds`, and appends the item snapshots. If that route exists but is no longer `PLANNED`, the child goes to the next slot (the evening of the same day, or the morning of the next day). If none exists, the service creates it. Both stops are `TRANSIT`. A unique index on `fromLocationId` + `toLocationId` + `serviceDate` + `slot`, only where `slot` is set and `deletedAt` is null, stops two requests from creating the same trunk route. Those four fields equal the two stop locations, the day, and the slot.
+
+A failure while assigning one child does not remove the children or the trunk routes already shared with other bookings. `currentShipmentId` stays the root.
 
 ## 6. Location API
 
@@ -235,13 +276,17 @@ Sorting: `sortBy` is `name` (default), `createdAt` or `updatedAt`. Paging and `s
 
 ## 7. Shipment API
 
-Implemented in `backend/src/modules/shipments/` (`ShipmentsController`, `ShipmentsService`).
+Implemented in `backend/src/modules/shipments/` (`ShipmentsController`, `ShipmentsService` for booking and reading, `ShipmentEditsService` for the corrections in §7.2).
 
 | Endpoint | Behavior |
 | --- | --- |
-| `POST /shipments/book` | Body: `CreateShipmentDto` (§4.1). Runs the booking in §4.2 and returns `201 Created` with the new Shipment. |
-| `GET /shipments` | One page of non-deleted Shipments, roots and segments together (`ListShipmentsQueryDto`). Default: newest first (`createdAt` descending), 20 per page. |
+| `POST /shipments/book` | Body: `CreateShipmentDto` (§4.1). Runs the booking in §4.2, then routing and route assignment (§5), and returns `201 Created`. |
+| `GET /shipments` | One page of non-deleted Shipments as summary rows (`ListShipmentsQueryDto`). Without `isRoot` it returns roots and segments together. The shipments screen always sends `isRoot=true`, so it lists bookings only. Default: newest first (`createdAt` descending), 20 per page. |
+| `GET /shipments/:id/view` | A booking with everything its detail screen shows (§7.1). Root shipments only. |
 | `GET /shipments/:id` | One Shipment by its public ULID. `404` if unknown or soft-deleted; `400` if `id` is not a ULID. |
+| `PUT /shipments/:id` | Corrects the customer name of a booking (§7.2). |
+| `PUT /shipments/:id/appointments` | Replaces the pickup and drop-off appointments of a booking (§7.2). |
+| `PUT /shipments/:id/items/:itemId` | Corrects one Item of a booking (§7.2). |
 
 Filters of `GET /shipments`. All are optional and combined with AND:
 
@@ -257,11 +302,65 @@ Filters of `GET /shipments`. All are optional and combined with AND:
 
 Sorting: `sortBy` is `createdAt` (default), `updatedAt`, `code`, `customerName` or `cost`. Segments have no `customerName` or `cost`, so they come first in an ascending sort by those fields.
 
-- **Response body:** `ShipmentResponse` (`dto/shipment-response.dto.ts`). It contains `id`, `code`, `parentId`, `customerName`, `cost`, `itemIds`, `deliveryInfos`, `status`, `metadata`, `createdAt` and `updatedAt`, with no `_id`, `__v`, or `deletedAt`. Locations appear only as ULID `locationId`s; `GET /locations/:id` returns their details. A list returns `ShipmentPageResponse`: `{ items, page, limit, total }`.
+- **Response body:** `ShipmentResponse` (`dto/shipment-response.dto.ts`) for `GET /shipments/:id` and `PUT /shipments/:id`. It contains `id`, `code`, `parentId`, `childrenIds`, `customerName`, `cost`, `itemIds`, `deliveryInfos`, `status`, `metadata`, `createdAt` and `updatedAt`, with no `_id`, `__v`, or `deletedAt`. `childrenIds` lists the child shipments in path order and is `[]` until they exist. Locations appear only as ULID `locationId`s; `GET /locations/:id` returns their details. `POST /shipments/book` returns `BookShipmentResponse`, which adds `routingStoppedReason` when routing left the two delivery infos unchanged (§5). That field is not stored and is not part of a list or detail response.
+- **List rows:** a list returns `ShipmentPageResponse` (`dto/shipment-summary-response.dto.ts`): `{ items, page, limit, total }`, where each item is a `ShipmentSummaryResponse`. A row has `id`, `code`, `status`, `customerName`, `cost`, `createdAt`, and:
+  - `origin` and `destination`: `{ id, name, type, province }` of the `PICKUP` and `DROPOFF` Locations. A leg has at most one of them, so the other is `null`. A Location that is not found keeps its `id`, and the other three fields are `null`.
+  - `pickupAppointment` and `dropoffAppointment`: the appointments of those two points.
+  - `items`: `{ id, itemCode, itemUnit, weight, weightUnit }` in `itemIds` order. An Item that is not found is left out.
+  - `routed`: `true` when the path has at least one `TRANSIT` point.
+
+  After the page query, `findSummaryPage()` runs two more queries for the whole page: one `find({ id: { $in } })` on `locations` and one on `items`, each selecting only the fields above. It never runs one query per row.
 - **Errors** (Nest's standard `{ statusCode, message, error }` body):
-  - `400`: validation messages (`message: string[]`), including invalid query parameters; the same Location for pickup and drop-off; an `INACTIVE` endpoint Location; `parentId` with `isRoot=true`.
-  - `404`: `GET /shipments/:id` for an unknown or soft-deleted Shipment.
-  - `409`: an item barcode is already registered, or was taken by a concurrent request.
-  - `503`: pricing is not configured (§4.3).
-  - `500`: any other failure; the booking is undone (§4.4).
-- **Not implemented yet:** updating or cancelling shipments; routing; authorization.
+  - `400`: validation messages (`message: string[]`), including invalid query parameters and an `:id` or `:itemId` that is not a ULID; the same Location for pickup and drop-off; an `INACTIVE` endpoint Location; `parentId` with `isRoot=true`; appointment windows in the wrong order (§7.2).
+  - `404`: an unknown or soft-deleted Shipment. `/view` and the three `PUT`s also return `404` for a segment id, because they accept bookings only. An `itemId` that is not in the booking's `itemIds` is `404` too.
+  - `409`: an item barcode is already registered, or was taken by a concurrent request; a `PUT` on a booking whose status is not `CREATED`.
+  - `503`: pricing is not configured (§4.3), for booking and for `PUT /shipments/:id/items/:itemId`.
+  - `500`: any other failure. A failure in steps 4 to 8 undoes the booking (§4.4). A failure while saving routed `deliveryInfos` does not.
+- **Not implemented yet:** cancelling shipments, changing the items of a booking (adding or removing one), changing a route's driver or vehicle, and authorization. DockTasks are not created by booking.
+
+### 7.1 Booking view
+
+`GET /shipments/:id/view` returns `ShipmentViewResponse` (`dto/shipment-view-response.dto.ts`), the data of the booking detail screen in one response:
+
+| Field | Contents |
+| --- | --- |
+| `shipment` | the root, as `ShipmentResponse` |
+| `locations` | every Location on the root's and the children's `deliveryInfos`, as `LocationResponse` |
+| `items` | the root's Items in `itemIds` order, as `ItemResponse` (`items/dto/item-response.dto.ts`) |
+| `children` | the child shipments in `childrenIds` order, as `ShipmentResponse` |
+| `routes` | the non-deleted routes that carry any child, as `RouteResponse` (`routes/dto/route-response.dto.ts`): `routeNumber`, `status`, `driverName`, `vehiclePlate`, `serviceDate` and `slot` (dock–dock routes only), `appointment`, `fromLocationId`, `toLocationId`, `shipmentIds`, `stops`, and `items`. The items are only `itemId`, `shipmentId`, `itemCode` and `barcode` from the route snapshot. |
+
+It uses five indexed queries and no `populate` or `$lookup`: the root by `id` (with `parentId: null`), then the children by `parentId`, the Items by `id`, and the routes by `shipmentIds` together, then the Locations by `id`. A segment id or an unknown id is `404`. The route is declared before `GET /shipments/:id`.
+
+### 7.2 Correcting a booking
+
+A booking can be corrected only while it is `CREATED`. All three `PUT`s:
+
+- accept a root id only. A segment id is `404`.
+- return `409` with "… the booking can no longer be edited" when the booking is not `CREATED`. The root is written with a filter that includes `status: CREATED`, so a status change between the read and the write is also `409`.
+- write with `runValidators: true`.
+
+| Endpoint | Body | Writes | Returns |
+| --- | --- | --- | --- |
+| `PUT /shipments/:id` | `UpdateShipmentCustomerDto`: `{ customerName }` | `customerName` on the root | `ShipmentResponse` |
+| `PUT /shipments/:id/appointments` | `UpdateAppointmentsDto`: `{ pickup, dropoff }`, two `{ from, to }` windows | see below | `ShipmentViewResponse` |
+| `PUT /shipments/:id/items/:itemId` | `UpdateItemDto`: any of `description` (string, or `null` to remove it), `itemUnit`, `weight` (positive), `weightUnit`, `dimensions` | see below | `ShipmentViewResponse` |
+
+**Appointments.** Each window needs `from` before `to`, and `pickup.to` must not be later than `dropoff.from`. Otherwise the request is `400` and nothing is read or written. Both windows are always sent and written:
+
+1. The root's `PICKUP` and `DROPOFF` appointments.
+2. The child that starts at the pickup store: its point 1. The child that ends at the drop-off store: its point 2.
+3. The dedicated route (a route without `slot`, §5) of each of those two children: the route `appointment` and the appointment of its stop at the store.
+
+The dock–dock route keeps its slot appointment. `actualWindow` and point statuses are not changed. An unrouted booking has no children or routes, so only the root is written.
+
+**Item.** `itemId` must be in the booking's `itemIds`. `weightUnit` is required when `weight` is sent. `barcode`, `itemCode`, `status`, `currentLocationId` and `currentShipmentId` are not in the DTO, so sending them is `400`. In this order:
+
+1. `ShipmentCostService` recalculates the booking cost (§4.3) with the new weight. When pricing is not configured this is `503` and nothing is written.
+2. The Item is updated.
+3. The root's `cost` is set to the new cost.
+4. On every non-deleted route that carries a child of this booking, the item's snapshot row gets the new `description`, `itemUnit`, `weight` and `weightUnit`. `itemCode` and `barcode` never change.
+
+The writes are not in a transaction (the local MongoDB is standalone). A failure part-way leaves the earlier writes in place, and the same `PUT` can be sent again.
+
+No other `PUT` exists. Items are not added to or removed from a booking.

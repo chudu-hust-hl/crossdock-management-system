@@ -143,7 +143,7 @@ Authentication and password handling are not part of the initial bootstrap.
 A real physical item. **The same physical item keeps one stable Item document throughout its whole logistics journey.** Never create a new Item document when the item moves to another shipment segment.
 
 - **Created by its booking:** Items are always created by the booking of a root Shipment, together with it. A booking never reuses an existing Item, and an Item belongs to exactly one root Shipment. A barcode that is already registered is rejected.
-- **Used by routing and planning:** the legs (child shipments) of that root Shipment reference the same Item `id`s.
+- **Kept by routing and by child shipments:** neither step creates or copies Items. Each child shipment references the same Item `id`s. `currentShipmentId` stays the root Shipment until a leg actually carries the item ([`business-workflows.md` §5](./business-workflows.md#5-routing)).
 - **At booking:** `status: CREATED`, `currentLocationId` is the pickup Location, and `currentShipmentId` is the root Shipment.
 
 Content (implemented):
@@ -173,6 +173,7 @@ Content (implemented):
 - `id` (ULID)
 - `code` — the shipment code (not `shipmentNumber`), `S-<nnnn>-<MMYY>`
 - `parentId` — ULID `id` of the parent shipment; `null` for a root shipment
+- `childrenIds` — ULID `id`s of the child shipments, in path order; `[]` until those children exist
 - `customerName` — the customer who booked; required on a root shipment
 - `cost` — the booking cost in whole VND, calculated by the system ([`business-workflows.md` §4.3](./business-workflows.md#43-cost)); required on a root shipment
 - `itemIds` — ULID `id`s of the Items
@@ -183,8 +184,7 @@ Content (implemented):
 
 Rules:
 
-- `parentId` is the authoritative parent-child relationship.
-- `childrenIds` is **not stored**; a shipment's segments are found by querying `parentId`. If it is ever added, it must always stay consistent with `parentId`.
+- `parentId` on each child is the authoritative link. `childrenIds` on the parent lists those same children in path order and must stay equal to them: every id in `childrenIds` has `parentId` equal to this shipment, and every child of this shipment appears in `childrenIds`.
 - Do **not** add `originLocationId` or `destinationLocationId`. Pickup, transit, and drop-off information belongs in `deliveryInfos`.
 - Every delivery info is connected to a Location through its required `locationId`. The location must exist and must not be deleted.
 
@@ -211,13 +211,17 @@ Content (implemented):
 - `status`: `PLANNED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`
 - `appointment: { from, to }`
 - `actualWindow: { from, to }`
-- `createdBy` — User reference (required)
+- `createdBy` — User reference (required). Until users exist, booking uses the fixed placeholder ULID `01ARZ3NDEKTSV4RRFFQ69G5FAV`.
+- `driverName`, `vehiclePlate` — plain text. Until dispatch exists, every new route uses `Nguyen Van Tai` and `29A-000.01`.
+- `items` — snapshot of the items on this route, copied at assignment so a scan does not join Item. It does not include `status` or `currentLocationId`. Scans do not change it. Correcting an Item on a `CREATED` booking rewrites its `description`, `itemUnit`, `weight` and `weightUnit` there.
+- `fromLocationId`, `toLocationId` — the two ends. On a dock–dock route they form the lane key together with `serviceDate` (`YYYY-MM-DD`, Vietnam time) and `slot` (`MORNING` or `EVENING`). A store–dock route leaves `serviceDate` and `slot` unset.
 - `metadata`
 - `createdAt`, `updatedAt`
 
 Rules:
 
 - A shipment segment belongs to one route. A route may carry many segments. The service layer enforces this.
+- A store–dock segment gets its own route. A dock–dock segment joins that direction's morning or evening route for the Vietnam calendar day ([`business-workflows.md` §5](./business-workflows.md#5-routing)).
 - Every stop is connected to a Location through its required `locationId`. The location must exist and must not be deleted.
 - Stops are embedded in the Route document. Do **not** create a separate RouteStop collection.
 - Stops and the segments' `deliveryInfos` are kept in sync by explicit service logic, not by schema middleware.
@@ -266,7 +270,7 @@ Questions 1–25 are resolved and kept here for traceability. Schema-level choic
 4. ~~Exact field names.~~ Resolved: see §4.
 5. ~~What `inboundLegId` / `outboundLegId` reference.~~ Resolved: a leg is a child shipment, so both reference `Shipment` (§4.4, §4.6).
 6. ~~Which leg references each DockTask type requires.~~ Resolved: the per-type rules are enforced in the service layer, not in the schema.
-7. ~~Whether `childrenIds` is maintained.~~ Resolved: not stored (§4.4).
+7. ~~Whether `childrenIds` is maintained.~~ Resolved: stored on the parent, in path order, and kept equal to the children found by `parentId` (§4.4).
 8. ~~Route stop types.~~ Resolved: same values as delivery info types.
 9. ~~Code formats.~~ Resolved: see §3 *Business codes*. `locationCode` was removed.
 10. ~~Weight and dimension units.~~ Resolved: `KG` / `LB` and `CM` / `IN`.
@@ -281,8 +285,9 @@ Questions 1–25 are resolved and kept here for traceability. Schema-level choic
 18. ~~Location reuse scope.~~ Resolved: only `STORE` Locations (customer pickup/drop-off points) are deduplicated, from every source including manual creation. `CROSS_DOCK` Locations are created by administrators for routing and are never deduplicated.
 19. ~~Concurrency of find-or-create.~~ Resolved: compound unique index `store_identity` with a case-insensitive collation and the partial filter `{ type: 'STORE', deletedAt: null }`; the service retries the lookup after a duplicate-key error.
 20. ~~Roles of `WAREHOUSE` and `CUSTOMER`.~~ Resolved: kept, but not used by any workflow yet.
-21. ~~Routing inputs.~~ Resolved: postal-code ranges, distances, and postal-code relationships, stored in the `metadata` collection ([`business-workflows.md` §5](./business-workflows.md#5-routing-future-service)).
-22. ~~How a routing result is stored.~~ Resolved: one leg (child shipment) per hop. A `STORE` ↔ `CROSS_DOCK` leg has its own Route; a `CROSS_DOCK` ↔ `CROSS_DOCK` Route carries many shipments.
+21. ~~Routing inputs.~~ Resolved: the booking routing step reads the `provinces` collection and each Location's `address.province` ([`business-workflows.md` §5](./business-workflows.md#5-routing)). Postal-code ranges and distances are not used.
+22. ~~How a routing result is stored.~~ Resolved: the booking routing step inserts the cross-dock hubs into the root shipment's `deliveryInfos`. The same request then creates one child shipment per hop ([`business-workflows.md` §5](./business-workflows.md#5-routing)).
+26. ~~How a child shipment is placed on a route.~~ Resolved: a store–dock child gets its own route; a dock–dock child joins that direction's morning or evening route. `driverName` and `vehiclePlate` are fixed placeholder text until dispatch exists (§4.5). DockTasks are not created at assignment.
 23. ~~Same pickup and drop-off.~~ Resolved: the request is rejected.
 24. ~~Appointments at creation.~~ Resolved: pickup and drop-off appointments are supplied when the shipment is created (added to `CreateShipmentDto` with the shipment task).
 25. ~~Items in a booking.~~ Resolved: every booking creates new Items with a required `itemUnit` (`BOX`, `PALLET`, `KEG`, `BAG`). Existing Items are never reused for a new shipment; the same Items are used through the shipment's routing and planning.

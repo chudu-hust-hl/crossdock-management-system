@@ -8,7 +8,7 @@ Instructions for every AI agent working in this repository. Read this file first
 - **Purpose:** University graduation project (software engineering) for managing logistics and cross-dock operations: shipments and shipment segments, physical items, routes, locations, warehouse inbound/outbound scanning, dock tasks, and users with roles.
 - **Backend stack:** NestJS, TypeScript, MongoDB, Mongoose (via `@nestjs/mongoose`), ULID public identifiers, Swagger/OpenAPI (`@nestjs/swagger`) for API documentation.
 - **Architecture:** Modular monolith. Not microservices.
-- **Repository layout (monorepo):** `backend/` (NestJS app, run npm commands from here), `frontend/` (Angular, created later), `docs/`, `.cursor/rules/`, root `docker-compose.yml` (local MongoDB).
+- **Repository layout (monorepo):** `backend/` (NestJS app, run npm commands from here), `frontend/` (Angular 21, run npm commands from here), `docs/`, `.cursor/rules/`, root `docker-compose.yml` (local MongoDB).
 - **Out of scope:** Hardware integrations, AI/ML, RFID, IoT. Message brokers, caches, cloud SDKs and auth providers are only added when a later task explicitly requires them.
 
 ## Source of truth

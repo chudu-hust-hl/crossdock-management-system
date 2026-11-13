@@ -168,6 +168,7 @@ No shipment history is stored on the Item. History comes from DockTask records.
 | `id` | `String` | yes | `generateUlid()` | common `id` convention |
 | `code` | `String` | yes | | unique, trimmed, `S-<nnnn>-MMYY` |
 | `parentId` | `String` (ULID) → `Shipment` | no | `null` | `null` = root shipment. Must not equal the document's own `id`. |
+| `childrenIds` | `String[]` (ULIDs) → `Shipment` | no | `[]` | Child shipments in path order. Empty until they are created. Each listed id has `parentId` equal to this document's `id`. |
 | `customerName` | `String` | on a root shipment | | trimmed |
 | `cost` | `Number` | on a root shipment | | `min: 0`; whole VND, calculated at booking |
 | `itemIds` | `String[]` (ULIDs) → `Item` | no | `[]` | the items in this shipment or segment |
@@ -177,7 +178,7 @@ No shipment history is stored on the Item. History comes from DockTask records.
 
 `customerName` and `cost` describe the booking, so they are required only when `parentId` is `null`. Segments (legs) do not repeat them.
 
-**Not stored:** `childrenIds` (segments are found with `find({ parentId })`, so `parentId` is the only stored link and the two can't disagree); `shipmentNumber`, `origin`, `destination`, `originLocationId`, `destinationLocationId`.
+**Not stored:** `shipmentNumber`, `origin`, `destination`, `originLocationId`, `destinationLocationId`. `childrenIds` is stored so a parent can be read without a second query; the service keeps it equal to the children found by `parentId`.
 
 `DeliveryInfo` (`_id: false`):
 
@@ -202,12 +203,21 @@ No shipment history is stored on the Item. History comes from DockTask records.
 | `id` | `String` | yes | `generateUlid()` | common `id` convention |
 | `routeNumber` | `String` | yes | | unique, trimmed, `R-<nnnn>-MMYY` |
 | `shipmentIds` | `String[]` (ULIDs) → `Shipment` | no | `[]` | shipment segments carried by the route |
+| `items` | `RouteItem[]` (embedded) | no | `[]` | scan snapshot copied at assignment; no `status` or `currentLocationId` |
 | `stops` | `RouteStop[]` (embedded) | no | `[]` | sequences must be unique; no RouteStop collection |
+| `fromLocationId` | `String` (ULID) → `Location` | yes | | first stop; with `toLocationId`, `serviceDate`, and `slot` it identifies a dock–dock route |
+| `toLocationId` | `String` (ULID) → `Location` | yes | | second stop |
+| `serviceDate` | `String` | on a dock–dock route | | `YYYY-MM-DD` in Vietnam time (UTC+7). Omitted on a store–dock route. |
+| `slot` | `String` | on a dock–dock route | | `MORNING` or `EVENING`. Omitted on a store–dock route. |
 | `status` | `RouteStatus` | yes | `PLANNED` | `PLANNED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED` |
 | `appointment` | `TimeWindow` | yes | `{ from: null, to: null }` | |
 | `actualWindow` | `TimeWindow` | yes | `{ from: null, to: null }` | |
-| `createdBy` | `String` (ULID) → `User` | yes | | The domain documents no route lifecycle without a creator. |
+| `driverName` | `String` | yes | | trimmed plain text. Placeholder until dispatch: `Nguyen Van Tai`. |
+| `vehiclePlate` | `String` | yes | | trimmed plain text. Placeholder until dispatch: `29A-000.01`. |
+| `createdBy` | `String` (ULID) → `User` | yes | | Placeholder until users exist: `01ARZ3NDEKTSV4RRFFQ69G5FAV`. |
 | `metadata` | `Mixed` | no | | |
+
+`RouteItem` (`_id: false`): `itemId`, `shipmentId` (the child shipment), `itemCode`, `barcode`, optional `description`, `itemUnit`, `weight`, `weightUnit`. Copied from the Item documents at assignment. Not updated when a scan changes the Item. A booking correction of the Item (`PUT /shipments/:id/items/:itemId`, [`business-workflows.md` §7.2](./business-workflows.md#72-correcting-a-booking)) rewrites `description`, `itemUnit`, `weight` and `weightUnit`; `itemCode` and `barcode` never change.
 
 No `plannedStartAt` / `plannedEndAt` / `actualStartAt` / `actualEndAt`.
 
@@ -223,7 +233,7 @@ No `plannedStartAt` / `plannedEndAt` / `actualStartAt` / `actualEndAt`.
 | `actualWindow` | `TimeWindow` | yes | `{ from: null, to: null }` | |
 | `status` | `DeliveryPointStatus` | yes | `PENDING` | |
 
-**Indexes:** `{ id: 1 }`, `{ routeNumber: 1 }` unique; multikey `{ shipmentIds: 1 }` (routes carrying a segment); `{ status: 1, 'appointment.from': 1 }` (upcoming routes by status).
+**Indexes:** `{ id: 1 }`, `{ routeNumber: 1 }` unique; multikey `{ shipmentIds: 1 }` (routes carrying a segment); `{ status: 1, 'appointment.from': 1 }` (upcoming routes by status). Unique partial index on `fromLocationId` + `toLocationId` + `serviceDate` + `slot` where `slot` is set and `deletedAt` is null, so one open dock–dock route exists per direction, day, and slot.
 
 ## 8. `dock_tasks`
 
@@ -289,7 +299,8 @@ These rules span documents, or depend on workflow state, so the schemas cannot e
 - Each stop's `shipmentIds` is contained in the route's `shipmentIds`.
 - Every `stops[].locationId` references an existing, non-deleted Location.
 - Stops are synchronised with the segments' `deliveryInfos` by explicit service logic, not by schema middleware.
-- A segment belongs to one route (the multikey index does not prevent a second one).
+- A segment belongs to one non-deleted route (the multikey index does not prevent a second one; the service checks).
+- On a dock–dock route, `fromLocationId`, `toLocationId`, `serviceDate`, and `slot` match the two stops, the Vietnam day, and the morning or evening window ([`business-workflows.md` §5](./business-workflows.md#5-routing)).
 
 **DockTask**
 

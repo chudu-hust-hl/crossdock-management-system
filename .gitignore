@@ -59,3 +59,11 @@ out/
 # Test coverage reports
 # ==========================================
 coverage/
+
+# ==========================================
+# Other files
+# ==========================================
+.cursorrules
+.cursor
+.agents/
+skills-lock.json

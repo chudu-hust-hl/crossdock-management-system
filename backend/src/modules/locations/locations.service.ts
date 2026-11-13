@@ -13,11 +13,13 @@ import { AddressDto } from './dto/address.dto';
 import { CreateLocationDto } from './dto/create-location.dto';
 import { ListLocationsQueryDto } from './dto/list-locations-query.dto';
 import { LocationCandidateDto } from './dto/location-candidate.dto';
+import { LocationStatus } from './enums/location-status.enum';
 import { LocationType } from './enums/location-type.enum';
 import {
   LOCATION_IDENTITY_COLLATION,
   normalizeIdentityText,
 } from './location-identity';
+import { Address } from './schemas/address.schema';
 import { Location } from './schemas/location.schema';
 
 /** The Location that was found or created, and whether it is new. */
@@ -25,6 +27,11 @@ export interface LocationResolution {
   location: Location;
   created: boolean;
 }
+
+/** The fields of a Location shown as a shipment's origin or destination in a list. */
+export type LocationSummary = Pick<Location, 'id' | 'name' | 'type'> & {
+  address: Pick<Address, 'province'>;
+};
 
 /** The fields needed to find or create a `STORE`. */
 type StoreInput = Omit<CreateLocationDto, 'type' | 'contactName'> & {
@@ -110,6 +117,46 @@ export class LocationsService {
       throw new NotFoundException(`Location ${id} not found`);
     }
     return location;
+  }
+
+  /** Non-deleted Locations with these public ids. Missing ids are omitted. */
+  async findByIds(ids: string[]): Promise<Location[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.locationModel
+      .find({ id: { $in: ids }, deletedAt: null })
+      .lean<Location[]>()
+      .exec();
+  }
+
+  /** Like `findByIds()`, but reads only the fields of `LocationSummary`. */
+  async findSummariesByIds(ids: string[]): Promise<LocationSummary[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.locationModel
+      .find(
+        { id: { $in: ids }, deletedAt: null },
+        { _id: 0, id: 1, name: 1, type: 1, 'address.province': 1 },
+      )
+      .lean<LocationSummary[]>()
+      .exec();
+  }
+
+  /**
+   * ACTIVE, non-deleted cross-docks. Routing decides which of them, if any,
+   * is the hub for a province; this method does not.
+   */
+  findActiveCrossDocks(): Promise<Location[]> {
+    return this.locationModel
+      .find({
+        type: LocationType.CROSS_DOCK,
+        status: LocationStatus.ACTIVE,
+        deletedAt: null,
+      })
+      .lean<Location[]>()
+      .exec();
   }
 
   /**

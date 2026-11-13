@@ -4,6 +4,7 @@ import { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
 import { HealthController } from '../health/health.controller';
 import { LocationsController } from '../modules/locations/locations.controller';
 import { LocationsService } from '../modules/locations/locations.service';
+import { ShipmentEditsService } from '../modules/shipments/shipment-edits.service';
 import { ShipmentsController } from '../modules/shipments/shipments.controller';
 import { ShipmentsService } from '../modules/shipments/shipments.service';
 import { createSwaggerDocument } from './swagger.config';
@@ -21,6 +22,7 @@ describe('Swagger document', () => {
       providers: [
         { provide: LocationsService, useValue: {} },
         { provide: ShipmentsService, useValue: {} },
+        { provide: ShipmentEditsService, useValue: {} },
       ],
     }).compile();
     app = moduleRef.createNestApplication();
@@ -40,9 +42,105 @@ describe('Swagger document', () => {
       '/shipments',
       '/shipments/book',
       '/shipments/{id}',
+      '/shipments/{id}/appointments',
+      '/shipments/{id}/items/{itemId}',
+      '/shipments/{id}/view',
     ]);
     expect(Object.keys(document.paths['/locations'])).toEqual(['post', 'get']);
     expect(Object.keys(document.paths['/shipments'])).toEqual(['get']);
+    expect(Object.keys(document.paths['/shipments/{id}'])).toEqual([
+      'get',
+      'put',
+    ]);
+    expect(Object.keys(document.paths['/shipments/{id}/view'])).toEqual([
+      'get',
+    ]);
+    for (const path of [
+      '/shipments/{id}/appointments',
+      '/shipments/{id}/items/{itemId}',
+    ]) {
+      expect(Object.keys(document.paths[path])).toEqual(['put']);
+    }
+  });
+
+  it('documents the booking view and the three PUT endpoints', () => {
+    const responses = (path: string, method: 'get' | 'put') =>
+      Object.keys(document.paths[path][method]!.responses).sort();
+
+    expect(responses('/shipments/{id}/view', 'get')).toEqual([
+      '200',
+      '400',
+      '404',
+    ]);
+    for (const path of ['/shipments/{id}', '/shipments/{id}/appointments']) {
+      expect(responses(path, 'put')).toEqual(['200', '400', '404', '409']);
+    }
+    expect(responses('/shipments/{id}/items/{itemId}', 'put')).toEqual([
+      '200',
+      '400',
+      '404',
+      '409',
+      '503',
+    ]);
+    expect(
+      document.paths['/shipments/{id}/items/{itemId}'].put!.parameters,
+    ).toEqual([
+      expect.objectContaining({ name: 'id', in: 'path', required: true }),
+      expect.objectContaining({ name: 'itemId', in: 'path', required: true }),
+    ]);
+    expect(schema('UpdateShipmentCustomerDto').required).toEqual([
+      'customerName',
+    ]);
+    expect(schema('UpdateAppointmentsDto').required).toEqual([
+      'pickup',
+      'dropoff',
+    ]);
+    expect(schema('UpdateItemDto').required).toBeUndefined();
+    expect(Object.keys(schema('UpdateItemDto').properties!)).toEqual([
+      'description',
+      'itemUnit',
+      'weight',
+      'weightUnit',
+      'dimensions',
+    ]);
+    expect(schema('ShipmentViewResponse').required).toEqual([
+      'shipment',
+      'locations',
+      'items',
+      'children',
+      'routes',
+    ]);
+    expect(Object.keys(schema('RouteItemResponse').properties!)).toEqual([
+      'itemId',
+      'shipmentId',
+      'itemCode',
+      'barcode',
+    ]);
+  });
+
+  it('describes a list row as a summary, not as the full Shipment', () => {
+    expect(schema('ShipmentPageResponse').properties!.items).toEqual({
+      type: 'array',
+      items: { $ref: '#/components/schemas/ShipmentSummaryResponse' },
+    });
+    expect(schema('ShipmentSummaryResponse').required).toEqual([
+      'id',
+      'code',
+      'status',
+      'createdAt',
+      'origin',
+      'destination',
+      'pickupAppointment',
+      'dropoffAppointment',
+      'items',
+      'routed',
+    ]);
+    expect(schema('ShipmentEndResponse').required).toEqual([
+      'id',
+      'name',
+      'type',
+      'province',
+    ]);
   });
 
   it('documents both POST /locations outcomes and the error responses', () => {
