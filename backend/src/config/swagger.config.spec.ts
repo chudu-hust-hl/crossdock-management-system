@@ -9,6 +9,8 @@ import { DockTasksController } from '../modules/dock-tasks/dock-tasks.controller
 import { DockTasksService } from '../modules/dock-tasks/dock-tasks.service';
 import { LocationsController } from '../modules/locations/locations.controller';
 import { LocationsService } from '../modules/locations/locations.service';
+import { RoutesController } from '../modules/routes/routes.controller';
+import { RoutesService } from '../modules/routes/routes.service';
 import { ShipmentEditsService } from '../modules/shipments/shipment-edits.service';
 import { ShipmentsController } from '../modules/shipments/shipments.controller';
 import { ShipmentsService } from '../modules/shipments/shipments.service';
@@ -29,6 +31,7 @@ describe('Swagger document', () => {
         HealthController,
         AuthController,
         LocationsController,
+        RoutesController,
         ShipmentsController,
         UsersController,
         DockTasksController,
@@ -39,6 +42,7 @@ describe('Swagger document', () => {
         { provide: UsersService, useValue: {} },
         { provide: JwtService, useValue: {} },
         { provide: LocationsService, useValue: {} },
+        { provide: RoutesService, useValue: {} },
         { provide: ShipmentsService, useValue: {} },
         { provide: ShipmentEditsService, useValue: {} },
       ],
@@ -63,6 +67,10 @@ describe('Swagger document', () => {
       '/health',
       '/locations',
       '/locations/{id}',
+      '/routes',
+      '/routes/{id}',
+      '/routes/{id}/candidates',
+      '/routes/{id}/shipments',
       '/shipments',
       '/shipments/book',
       '/shipments/{id}',
@@ -208,6 +216,7 @@ describe('Swagger document', () => {
       'POST /dock-tasks/pickup',
       'POST /dock-tasks/scan',
       'POST /locations',
+      'POST /routes/{id}/shipments',
       'POST /shipments/book',
       'POST /users',
       'PUT /shipments/{id}',
@@ -512,6 +521,71 @@ describe('Swagger document', () => {
       'customerName',
       'cost',
     ]);
+  });
+
+  it('documents the route list, the view, the candidates and the move', () => {
+    const responses = (path: string, method: 'get' | 'post') =>
+      Object.keys(document.paths[path][method]!.responses).sort();
+
+    expect(responses('/routes', 'get')).toEqual(['200', '400']);
+    expect(responses('/routes/{id}', 'get')).toEqual(['200', '400', '404']);
+    expect(responses('/routes/{id}/candidates', 'get')).toEqual([
+      '200',
+      '400',
+      '404',
+    ]);
+    expect(responses('/routes/{id}/shipments', 'post')).toEqual([
+      '200',
+      '400',
+      '401',
+      '403',
+      '404',
+      '409',
+    ]);
+    expect(optionalQuery('/routes')).toEqual([
+      'page',
+      'limit',
+      'status',
+      'routeNumber',
+      'serviceDate',
+      'slot',
+    ]);
+    expect(schema('RoutePageResponse').required).toEqual([
+      'page',
+      'limit',
+      'total',
+      'items',
+    ]);
+    expect(schema('RouteSummaryResponse').required).toEqual([
+      'id',
+      'routeNumber',
+      'status',
+      'driverName',
+      'vehiclePlate',
+      'appointment',
+      'shipmentCount',
+      'from',
+      'to',
+    ]);
+    expect(schema('RouteEndResponse').required).toEqual([
+      'id',
+      'name',
+      'type',
+      'province',
+    ]);
+    expect(schema('RouteViewResponse').required).toEqual([
+      'route',
+      'locations',
+      'shipments',
+    ]);
+    expect(schema('RouteCandidateResponse').required).toEqual([
+      'id',
+      'code',
+      'parentCode',
+      'customerName',
+      'itemCount',
+    ]);
+    expect(schema('AddRouteShipmentsDto').required).toEqual(['shipmentIds']);
   });
 
   it('describes the create body with its required fields', () => {

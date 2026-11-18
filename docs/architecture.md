@@ -245,7 +245,7 @@ Schema steps add two kinds of tests:
 
 ## 9. Frontend
 
-The frontend is an Angular 21 application in `frontend/`. Angular 21 (LTS) is the newest major whose CLI supports the project's Node.js 22.14. It is a standalone-component app with no UI library, no Tailwind, and no Angular Material. Every page except `/login` requires a logged-in user. It has no form that creates records. The only writes are the three corrections on the booking detail page, which the API accepts from an `ADMIN` or `SYS_ADMIN` token only.
+The frontend is an Angular 21 application in `frontend/`. Angular 21 (LTS) is the newest major whose CLI supports the project's Node.js 22.14. It is a standalone-component app with no UI library, no Tailwind, and no Angular Material. Every page except `/login` requires a logged-in user. It has no form that creates records. The writes are the three corrections on the booking detail page (`ADMIN` or `SYS_ADMIN`) and moving `CREATED` child shipments onto a `PLANNED` route (`SYS_ADMIN` or `DOCK_MANAGER`).
 
 ```text
 frontend/src/
@@ -254,7 +254,7 @@ frontend/src/
 └── app/
     ├── app.ts / app.html       # shell: header with navigation and the user, <router-outlet>
     ├── app.config.ts           # router, the one HttpClient (with authInterceptor), date format
-    ├── app.routes.ts           # /login, and one lazy, guarded route per feature: /shipments, /locations
+    ├── app.routes.ts           # /login, and one lazy, guarded route per feature: /shipments, /routes, /locations
     ├── auth/
     │   ├── session.ts          # Session: the token and user, kept in localStorage until expiry
     │   ├── auth.interceptor.ts # sends Authorization: Bearer; a 401 ends the session
@@ -266,8 +266,9 @@ frontend/src/
     │   └── load-state.ts       # load(): loading → loaded | error, for every page
     ├── shared/
     │   ├── list-query.ts       # URL query ⇄ API list query (filters, page)
-    │   └── pager.ts            # Previous / Next for both lists
+    │   └── pager.ts            # Previous / Next for the lists
     ├── shipments/              # shipments.routes.ts, shipment-list, shipment-detail
+    ├── routes/                 # routes.routes.ts, route-list, route-detail
     └── locations/              # locations.routes.ts, location-list, location-detail
 ```
 
@@ -276,12 +277,13 @@ frontend/src/
   - `loggedInGuard` sends a visitor who is not logged in, or whose token has expired, to `/login?returnUrl=…`.
   - `authInterceptor` adds `Authorization: Bearer <token>` to every API request while logged in. A `401` on such a request (an expired token or a deactivated user) ends the session and opens `/login`, with "Your session has ended" and the page to return to. A `403` (a role that may not edit) is shown as the editor's error.
   - The header shows the navigation, the user's name and roles, and Log out only while logged in. Log out removes the session and opens `/login`; there is no logout endpoint, since tokens are stateless.
-- **Pages:** each feature has a list (`/shipments`, `/locations`) and a detail page (`/shipments/:id`, `/locations/:id`).
+- **Pages:** each feature has a list (`/shipments`, `/routes`, `/locations`) and a detail page (`/shipments/:id`, `/routes/:id`, `/locations/:id`).
   - A list calls `GET /<feature>` with the filters from its form. The code or name in a row links to the detail page.
   - The Locations pages call `GET /locations` and `GET /locations/:id`.
   - The shipments list shows bookings only. It always sends `isRoot=true`, and opening it without `isRoot=true` in the URL replaces the URL with one that has it. Its filters are code, customer and status. Each row shows the code, status and "Not routed" when there is no `TRANSIT` point, then the origin → destination stores, the two appointments, and the customer, cost and items (three items, then "+N").
   - The booking detail calls `GET /shipments/:id/view`. It shows the path, the items, and each leg with its routes. Location names link to their Location.
   - On a `CREATED` booking it can edit the customer name, the pickup or drop-off window (the `PUT` always sends both), and one item. One editor is open at a time. Save is disabled while it runs, the page reloads the view on success, and an error is shown above the editor. A `TRANSIT` row and a route's Edit stay disabled, and every Edit is disabled on a booking that is not `CREATED`.
+  - The routes list filters by route number, status, service date and slot. A dock–dock row shows the slot and the service date; a row without them says Dedicated. The detail calls `GET /routes/:id` and shows the two stops, the shipments on each stop, and the item snapshot grouped by shipment code. On a `PLANNED` route, a `SYS_ADMIN` or `DOCK_MANAGER` can open one panel, pick candidates from `GET /routes/:id/candidates`, and move them with `POST /routes/:id/shipments`. The page reloads the detail on success. Stops, locations, the driver and the vehicle are not edited.
 - **State in the URL:** a list's filters and page are query parameters, e.g. `/shipments?isRoot=true&page=2`. Each change of the URL loads the list again, so reload and the back button keep the list. The page size is fixed at 20.
 - **Loading, empty, error:** every page shows `Loading…`, then the data, a "No … found." line, or the error. The error text is the `message` from Nest's error body (validation messages joined with `;`), or "Cannot reach the API" when there is no response.
 - **Styling:** `styles.css` is the only stylesheet; components have none. The `@schematics/angular:component` default in `angular.json` is `style: none`.

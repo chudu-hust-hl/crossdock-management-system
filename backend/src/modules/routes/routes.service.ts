@@ -1,17 +1,38 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, UpdateQuery } from 'mongoose';
+import { FilterQuery, Model, UpdateQuery } from 'mongoose';
 import { BusinessCodeType } from '../../common/enums/business-code-type.enum';
+import { SortOrder } from '../../common/enums/sort-order.enum';
 import { DeliveryPointStatus } from '../../common/enums/delivery-point-status.enum';
 import { DeliveryPointType } from '../../common/enums/delivery-point-type.enum';
 import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
+import { buildSort, findPage } from '../../common/utils/pagination.util';
+import { containsIgnoringCase } from '../../common/utils/text-filter.util';
+import { DockTask } from '../dock-tasks/schemas/dock-task.schema';
 import { ItemsService } from '../items/items.service';
 import { Item } from '../items/schemas/item.schema';
 import { LocationType } from '../locations/enums/location-type.enum';
 import { LocationsService } from '../locations/locations.service';
 import { MetadataService } from '../metadata/metadata.service';
+import { ShipmentStatus } from '../shipments/enums/shipment-status.enum';
 import { DeliveryInfo } from '../shipments/schemas/delivery-info.schema';
 import { Shipment } from '../shipments/schemas/shipment.schema';
+import { ListRoutesQueryDto } from './dto/list-routes-query.dto';
+import { RouteCandidateResponse } from './dto/route-candidate-response.dto';
+import {
+  RoutePageResponse,
+  toRoutePageResponse,
+} from './dto/route-summary-response.dto';
+import {
+  RouteShipmentResponse,
+  RouteStopLocation,
+  RouteViewResponse,
+  toRouteViewResponse,
+} from './dto/route-view-response.dto';
 import { RouteStatus } from './enums/route-status.enum';
 import {
   ROUTE_CREATED_BY,
@@ -37,6 +58,10 @@ export class RoutesService {
   constructor(
     @InjectModel(Route.name)
     private readonly routeModel: Model<Route>,
+    @InjectModel(Shipment.name)
+    private readonly shipmentModel: Model<Shipment>,
+    @InjectModel(DockTask.name)
+    private readonly dockTaskModel: Model<DockTask>,
     private readonly locationsService: LocationsService,
     private readonly itemsService: ItemsService,
     private readonly metadataService: MetadataService,
@@ -326,6 +351,322 @@ export class RoutesService {
     });
   }
 
+  /**
+   * Non-deleted routes, one page. Locations of the page are loaded with one query.
+   * Sort is `appointment.from` ascending, then `id`.
+   */
+  async findPage(query: ListRoutesQueryDto): Promise<RoutePageResponse> {
+    const page = await findPage(
+      this.routeModel,
+      this.buildListFilter(query),
+      buildSort('appointment.from', SortOrder.ASC),
+      query,
+    );
+    const locationIds = [
+      ...new Set(
+        page.items.flatMap((route) => [
+          route.fromLocationId,
+          route.toLocationId,
+        ]),
+      ),
+    ];
+    const locations =
+      await this.locationsService.findSummariesByIds(locationIds);
+    return toRoutePageResponse(page, locations);
+  }
+
+  /** One route, its two stop locations, and the shipments on it. */
+  async findView(id: string): Promise<RouteViewResponse> {
+    const route = await this.requireRoute(id);
+    return this.viewOf(route.toObject());
+  }
+
+  /**
+   * CREATED children whose two ends are this route's stops, in that order,
+   * and that are not already listed on it.
+   */
+  async findCandidates(id: string): Promise<RouteCandidateResponse[]> {
+    const route = await this.requireRoute(id);
+    const children = await this.shipmentModel
+      .find({
+        status: ShipmentStatus.CREATED,
+        deletedAt: null,
+        parentId: { $type: 'string' },
+        id: { $nin: route.shipmentIds },
+        deliveryInfos: {
+          $size: 2,
+          $all: [
+            {
+              $elemMatch: {
+                sequence: 1,
+                locationId: route.fromLocationId,
+              },
+            },
+            {
+              $elemMatch: {
+                sequence: 2,
+                locationId: route.toLocationId,
+              },
+            },
+          ],
+        },
+      })
+      .sort({ code: 1, id: 1 })
+      .lean<Shipment[]>()
+      .exec();
+    const parents = await this.rootsOf(children);
+    return children.map((child) => {
+      const parent = child.parentId ? parents.get(child.parentId) : undefined;
+      return {
+        id: child.id,
+        code: child.code,
+        parentCode: parent?.code ?? null,
+        customerName: parent?.customerName ?? null,
+        itemCount: child.itemIds.length,
+      };
+    });
+  }
+
+  /**
+   * Moves CREATED children onto this PLANNED route. Nothing is written when any
+   * id is rejected (docs/domain-model.md §4.5).
+   */
+  async addShipments(
+    routeId: string,
+    shipmentIds: string[],
+  ): Promise<RouteViewResponse> {
+    const route = await this.requireRoute(routeId);
+    if (route.status !== RouteStatus.PLANNED) {
+      throw new ConflictException(
+        `Route ${route.routeNumber} is ${route.status}, not PLANNED`,
+      );
+    }
+
+    const found = await this.shipmentModel
+      .find({ id: { $in: shipmentIds }, deletedAt: null })
+      .lean<Shipment[]>()
+      .exec();
+    const byId = new Map(found.map((shipment) => [shipment.id, shipment]));
+    const accepted: Shipment[] = [];
+    for (const id of shipmentIds) {
+      const shipment = byId.get(id);
+      if (!shipment || !hasRouteEnds(shipment, route)) {
+        throw new ConflictException(
+          `Shipment ${id} is not a CREATED child from ${route.fromLocationId} to ${route.toLocationId}`,
+        );
+      }
+      accepted.push(shipment);
+    }
+    for (const id of shipmentIds) {
+      if (route.shipmentIds.includes(id)) {
+        throw new ConflictException(
+          `Shipment ${id} is already on route ${route.routeNumber}`,
+        );
+      }
+    }
+    const tasked = await this.dockTaskModel
+      .findOne({ shipmentId: { $in: shipmentIds }, deletedAt: null })
+      .lean<DockTask>()
+      .exec();
+    if (tasked) {
+      throw new ConflictException(
+        `Shipment ${tasked.shipmentId} already has a dock task`,
+      );
+    }
+
+    const snapshots = await this.snapshotsForShipments(accepted);
+    await this.detachFromOtherRoutes(shipmentIds, routeId);
+    this.appendShipments(route, shipmentIds, snapshots);
+    await route.save();
+    return this.viewOf(route.toObject());
+  }
+
+  private buildListFilter(query: ListRoutesQueryDto): FilterQuery<Route> {
+    return {
+      deletedAt: null,
+      ...(query.status && { status: query.status }),
+      ...(query.routeNumber && {
+        routeNumber: containsIgnoringCase(query.routeNumber),
+      }),
+      ...(query.serviceDate && { serviceDate: query.serviceDate }),
+      ...(query.slot && { slot: query.slot }),
+    };
+  }
+
+  private async requireRoute(id: string): Promise<RouteDocument> {
+    const route = await this.routeModel.findOne({ id, deletedAt: null });
+    if (!route) {
+      throw new NotFoundException(`Route ${id} not found`);
+    }
+    return route;
+  }
+
+  private async viewOf(route: Route): Promise<RouteViewResponse> {
+    const [locations, shipments] = await Promise.all([
+      this.stopLocations(route),
+      this.shipmentsOn(route),
+    ]);
+    return toRouteViewResponse({ route, locations, shipments });
+  }
+
+  /** The two stop locations, in stop order. A missing Location is omitted. */
+  private async stopLocations(route: Route): Promise<RouteStopLocation[]> {
+    const stopIds = [...route.stops]
+      .sort((left, right) => left.sequence - right.sequence)
+      .map((stop) => stop.locationId);
+    const found = await this.locationsService.findByIds(stopIds);
+    const byId = new Map(found.map((location) => [location.id, location]));
+    return stopIds.flatMap((id) => {
+      const location = byId.get(id);
+      return location
+        ? [
+            {
+              id: location.id,
+              name: location.name,
+              type: location.type,
+              address: location.address,
+            },
+          ]
+        : [];
+    });
+  }
+
+  /**
+   * Shipments of `route.shipmentIds`, in that order. One query for those
+   * shipments and one for their roots. A missing shipment is omitted.
+   */
+  private async shipmentsOn(route: Route): Promise<RouteShipmentResponse[]> {
+    if (route.shipmentIds.length === 0) {
+      return [];
+    }
+    const found = await this.shipmentModel
+      .find({ id: { $in: route.shipmentIds }, deletedAt: null })
+      .lean<Shipment[]>()
+      .exec();
+    const byId = new Map(found.map((shipment) => [shipment.id, shipment]));
+    const ordered = route.shipmentIds.flatMap((id) => {
+      const shipment = byId.get(id);
+      return shipment ? [shipment] : [];
+    });
+    const parents = await this.rootsOf(ordered);
+    return ordered.map((shipment) => ({
+      id: shipment.id,
+      code: shipment.code,
+      status: shipment.status,
+      parentId: shipment.parentId,
+      customerName: shipment.parentId
+        ? (parents.get(shipment.parentId)?.customerName ?? null)
+        : null,
+      itemCount: shipment.itemIds.length,
+    }));
+  }
+
+  /** One query for the roots of these children. */
+  private async rootsOf(children: Shipment[]): Promise<Map<string, Shipment>> {
+    const parentIds = [
+      ...new Set(
+        children.flatMap((child) => (child.parentId ? [child.parentId] : [])),
+      ),
+    ];
+    if (parentIds.length === 0) {
+      return new Map();
+    }
+    const parents = await this.shipmentModel
+      .find({ id: { $in: parentIds }, deletedAt: null })
+      .lean<Shipment[]>()
+      .exec();
+    return new Map(parents.map((parent) => [parent.id, parent]));
+  }
+
+  /**
+   * Removes these children from every other non-deleted route: the route list,
+   * both stops, and the snapshots. An emptied route is soft-deleted so the
+   * dock-lane index no longer holds it.
+   */
+  private async detachFromOtherRoutes(
+    shipmentIds: string[],
+    stayingOnRouteId: string,
+  ): Promise<void> {
+    const moving = new Set(shipmentIds);
+    const sources = await this.routeModel.find({
+      id: { $ne: stayingOnRouteId },
+      shipmentIds: { $in: shipmentIds },
+      deletedAt: null,
+    });
+    for (const source of sources) {
+      source.shipmentIds = source.shipmentIds.filter((id) => !moving.has(id));
+      for (const stop of source.stops) {
+        stop.shipmentIds = stop.shipmentIds.filter((id) => !moving.has(id));
+      }
+      source.items = source.items.filter(
+        (item) => !moving.has(item.shipmentId),
+      );
+      if (source.shipmentIds.length === 0) {
+        source.deletedAt = new Date();
+      }
+      assertStopsInsideRoute(source);
+      source.markModified('shipmentIds');
+      source.markModified('stops');
+      source.markModified('items');
+      await source.save();
+    }
+  }
+
+  private appendShipments(
+    route: RouteDocument,
+    shipmentIds: string[],
+    snapshots: RouteItem[],
+  ): void {
+    for (const shipmentId of shipmentIds) {
+      if (!route.shipmentIds.includes(shipmentId)) {
+        route.shipmentIds.push(shipmentId);
+      }
+      for (const stop of route.stops) {
+        if (!stop.shipmentIds.includes(shipmentId)) {
+          stop.shipmentIds.push(shipmentId);
+        }
+      }
+    }
+    for (const snapshot of snapshots) {
+      const duplicate = route.items.some(
+        (item) =>
+          item.itemId === snapshot.itemId &&
+          item.shipmentId === snapshot.shipmentId,
+      );
+      if (!duplicate) {
+        route.items.push(snapshot);
+      }
+    }
+    assertStopsInsideRoute(route);
+    route.markModified('shipmentIds');
+    route.markModified('stops');
+    route.markModified('items');
+  }
+
+  /** Copies every item of these children. One item query for the whole request. */
+  private async snapshotsForShipments(
+    shipments: Shipment[],
+  ): Promise<RouteItem[]> {
+    const itemIds = [
+      ...new Set(shipments.flatMap((shipment) => shipment.itemIds)),
+    ];
+    const items = await this.itemsService.findByIds(itemIds);
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const snapshots: RouteItem[] = [];
+    for (const shipment of shipments) {
+      for (const itemId of shipment.itemIds) {
+        const item = byId.get(itemId);
+        if (!item || item.weight == null || !item.weightUnit) {
+          throw new Error(
+            `Item ${itemId} cannot be copied onto a route for shipment ${shipment.id}`,
+          );
+        }
+        snapshots.push(snapshotOf(item, shipment.id));
+      }
+    }
+    return snapshots;
+  }
+
   private async snapshotsFor(child: RoutedChild): Promise<RouteItem[]> {
     const items = await this.itemsService.findByIds(child.itemIds);
     const byId = new Map(items.map((item) => [item.id, item]));
@@ -339,6 +680,24 @@ export class RoutesService {
       return snapshotOf(item, child.id);
     });
   }
+}
+
+/** A CREATED child whose delivery infos are this route's two ends, in order. */
+function hasRouteEnds(
+  shipment: Shipment,
+  route: Pick<Route, 'fromLocationId' | 'toLocationId'>,
+): boolean {
+  if (shipment.parentId == null || shipment.status !== ShipmentStatus.CREATED) {
+    return false;
+  }
+  const points = [...shipment.deliveryInfos].sort(
+    (left, right) => left.sequence - right.sequence,
+  );
+  return (
+    points.length === 2 &&
+    points[0].locationId === route.fromLocationId &&
+    points[1].locationId === route.toLocationId
+  );
 }
 
 function endsOf(child: RoutedChild): [DeliveryInfo, DeliveryInfo] {

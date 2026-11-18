@@ -78,6 +78,24 @@ describe('ApiService', () => {
     ]);
   });
 
+  it('lists routes and moves shipments onto one', () => {
+    api.getRoutes({ page: 1, limit: 20, status: 'PLANNED', routeNumber: '' }).subscribe();
+    api.getRoute(ULID).subscribe();
+    api.getRouteCandidates(ULID).subscribe();
+    api.addRouteShipments(ULID, ['01M5HM0P9Q8R7S6T5V4W3X2Y1Z']).subscribe();
+
+    const list = http.expectOne((req) => req.url === `${environment.apiBaseUrl}/routes`);
+    expect(list.request.params.toString()).toBe('page=1&limit=20&status=PLANNED');
+    list.flush({ items: [], page: 1, limit: 20, total: 0 });
+
+    http.expectOne(`${environment.apiBaseUrl}/routes/${ULID}`).flush({});
+    http.expectOne(`${environment.apiBaseUrl}/routes/${ULID}/candidates`).flush([]);
+    const move = http.expectOne(`${environment.apiBaseUrl}/routes/${ULID}/shipments`);
+    expect(move.request.method).toBe('POST');
+    expect(move.request.body).toEqual({ shipmentIds: ['01M5HM0P9Q8R7S6T5V4W3X2Y1Z'] });
+    move.flush({});
+  });
+
   it('reports loading, then the data', async () => {
     const states = firstValueFrom(load(api.getShipment(ULID)).pipe(toArray()));
     http.expectOne(`${environment.apiBaseUrl}/shipments/${ULID}`).flush({ id: ULID });

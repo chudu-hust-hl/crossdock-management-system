@@ -1,0 +1,82 @@
+<h1>Routes</h1>
+
+<form class="filters" (submit)="search($event)">
+  <label>
+    Route number
+    <input name="routeNumber" [value]="params().get('routeNumber') ?? ''" />
+  </label>
+  <label>
+    Status
+    <select name="status">
+      <option value="">All</option>
+      @for (status of statuses; track status) {
+        <option [value]="status" [selected]="params().get('status') === status">
+          {{ status }}
+        </option>
+      }
+    </select>
+  </label>
+  <label>
+    Service date
+    <input type="date" name="serviceDate" [value]="params().get('serviceDate') ?? ''" />
+  </label>
+  <label>
+    Slot
+    <select name="slot">
+      <option value="">All</option>
+      @for (slot of slots; track slot) {
+        <option [value]="slot" [selected]="params().get('slot') === slot">
+          {{ slot }}
+        </option>
+      }
+    </select>
+  </label>
+  <button type="submit" class="primary">Search</button>
+  <button type="button" (click)="clear()">Clear</button>
+</form>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let page = current.data;
+  @if (page.items.length === 0) {
+    <p class="muted">No routes found.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Route</th>
+          <th>Status</th>
+          <th>Lane</th>
+          <th>Schedule</th>
+          <th>Shipments</th>
+          <th>Driver</th>
+          <th>Vehicle</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (route of page.items; track route.id) {
+          <tr>
+            <td>
+              <a class="key" [routerLink]="route.id">{{ route.routeNumber }}</a>
+            </td>
+            <td>
+              <span class="status" [attr.data-status]="route.status">{{ route.status }}</span>
+            </td>
+            <td class="lane">
+              {{ placeLabel(route.from) }} <span>→</span> {{ placeLabel(route.to) }}
+            </td>
+            <td>{{ scheduleLabel(route) }}</td>
+            <td class="num">{{ route.shipmentCount }}</td>
+            <td>{{ route.driverName }}</td>
+            <td>{{ route.vehiclePlate }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+  <app-pager [page]="page.page" [limit]="page.limit" [total]="page.total" />
+}

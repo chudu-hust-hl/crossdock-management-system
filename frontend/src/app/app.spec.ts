@@ -21,7 +21,7 @@ describe('App', () => {
 
   afterEach(() => localStorage.removeItem(SESSION_STORAGE_KEY));
 
-  it('shows the navigation to both features', async () => {
+  it('shows the navigation to the three features', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const links = [...(fixture.nativeElement as HTMLElement).querySelectorAll('nav a')].map(
@@ -30,6 +30,7 @@ describe('App', () => {
 
     expect(links).toEqual([
       ['Shipments', '/shipments'],
+      ['Routes', '/routes'],
       ['Locations', '/locations'],
     ]);
   });

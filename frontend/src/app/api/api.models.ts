@@ -155,6 +155,74 @@ export interface Item {
   currentShipmentId?: string;
 }
 
+export const ROUTE_STATUSES = ['PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'] as const;
+export type RouteStatus = (typeof ROUTE_STATUSES)[number];
+
+export const ROUTE_SLOTS = ['MORNING', 'EVENING'] as const;
+export type RouteSlot = (typeof ROUTE_SLOTS)[number];
+
+/** `RouteEndResponse`: one end of a route in a list. A missing Location keeps only its id. */
+export interface RouteEnd {
+  id: string;
+  name: string | null;
+  type: LocationType | null;
+  province: string | null;
+}
+
+/** `RouteSummaryResponse`: one row of `GET /routes`. */
+export interface RouteSummary {
+  id: string;
+  routeNumber: string;
+  status: RouteStatus;
+  driverName: string;
+  vehiclePlate: string;
+  /** Set with `slot` on a dock–dock route; absent on a dedicated route. */
+  serviceDate?: string;
+  slot?: RouteSlot;
+  appointment: TimeWindow;
+  shipmentCount: number;
+  /** Stop 1. */
+  from: RouteEnd;
+  /** Stop 2. */
+  to: RouteEnd;
+}
+
+/** `RouteLocationResponse`: one stop's Location on `GET /routes/:id`. */
+export interface RouteLocation {
+  id: string;
+  name: string;
+  type: LocationType;
+  address: Address;
+}
+
+/** `RouteShipmentResponse`: one child shipment on `GET /routes/:id`. */
+export interface RouteShipment {
+  id: string;
+  code: string;
+  status: ShipmentStatus;
+  parentId: string | null;
+  customerName: string | null;
+  itemCount: number;
+}
+
+/** `RouteViewResponse`: `GET /routes/:id` and the answer of the move. */
+export interface RouteView {
+  route: Route;
+  /** The two stop Locations, in stop order. A missing one is omitted. */
+  locations: RouteLocation[];
+  /** In `route.shipmentIds` order. A missing shipment is omitted. */
+  shipments: RouteShipment[];
+}
+
+/** `RouteCandidateResponse`: a CREATED child that may be moved onto the route. */
+export interface RouteCandidate {
+  id: string;
+  code: string;
+  parentCode: string | null;
+  customerName: string | null;
+  itemCount: number;
+}
+
 /** `RouteStopResponse` */
 export interface RouteStop {
   sequence: number;
@@ -170,12 +238,12 @@ export interface RouteStop {
 export interface Route {
   id: string;
   routeNumber: string;
-  status: 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  status: RouteStatus;
   driverName: string;
   vehiclePlate: string;
   /** Set with `slot` on a dock–dock route; absent on a dedicated route. */
   serviceDate?: string;
-  slot?: 'MORNING' | 'EVENING';
+  slot?: RouteSlot;
   appointment: TimeWindow;
   fromLocationId: string;
   toLocationId: string;

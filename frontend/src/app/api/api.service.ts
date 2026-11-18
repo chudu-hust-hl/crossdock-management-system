@@ -8,6 +8,9 @@ import {
   Location,
   LoginResponse,
   Page,
+  RouteCandidate,
+  RouteSummary,
+  RouteView,
   Shipment,
   ShipmentSummary,
   ShipmentView,
@@ -58,6 +61,25 @@ export class ApiService {
     return this.http.put<ShipmentView>(`${this.shipmentUrl(id)}/appointments`, body);
   }
 
+  getRoutes(query: ListQuery): Observable<Page<RouteSummary>> {
+    return this.http.get<Page<RouteSummary>>(`${this.baseUrl}/routes`, {
+      params: toHttpParams(query),
+    });
+  }
+
+  getRoute(id: string): Observable<RouteView> {
+    return this.http.get<RouteView>(this.routeUrl(id));
+  }
+
+  getRouteCandidates(id: string): Observable<RouteCandidate[]> {
+    return this.http.get<RouteCandidate[]>(`${this.routeUrl(id)}/candidates`);
+  }
+
+  /** Moves these child shipments onto the route. The answer is the route view. */
+  addRouteShipments(id: string, shipmentIds: string[]): Observable<RouteView> {
+    return this.http.post<RouteView>(`${this.routeUrl(id)}/shipments`, { shipmentIds });
+  }
+
   updateItem(id: string, itemId: string, body: ItemUpdate): Observable<ShipmentView> {
     return this.http.put<ShipmentView>(
       `${this.shipmentUrl(id)}/items/${encodeURIComponent(itemId)}`,
@@ -67,6 +89,10 @@ export class ApiService {
 
   private shipmentUrl(id: string): string {
     return `${this.baseUrl}/shipments/${encodeURIComponent(id)}`;
+  }
+
+  private routeUrl(id: string): string {
+    return `${this.baseUrl}/routes/${encodeURIComponent(id)}`;
   }
 }
 

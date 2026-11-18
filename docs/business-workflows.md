@@ -249,6 +249,8 @@ Two kinds of route:
 
 A failure while assigning one child does not remove the children or the trunk routes already shared with other bookings. `currentShipmentId` stays the root. No DockTask is created by booking or by route assignment. The first tasks are created when a dock action runs ([`scanning-flows.md`](./scanning-flows.md)).
 
+**Moving a child onto a planned route.** Later, `POST /routes/:id/shipments` (a `SYS_ADMIN` or `DOCK_MANAGER`) moves one or more `CREATED` children onto a route that is already `PLANNED` and already has the same two ends. The whole request is rejected, and nothing is written, when the route is not `PLANNED`, any id is not a `CREATED` child with those ends, any id is already on this route, or any of them already has a non-deleted DockTask. Otherwise each child is removed from its current non-deleted route — `shipmentIds`, both stops' `shipmentIds`, and the snapshots of its items. A route that then has no shipments is soft-deleted, which releases the dock-lane unique index. The child is then appended to this route's `shipmentIds` and to both existing stops, and snapshots of its items are appended. Stops are not added or reordered. The child, the root, the stops' locations, `driverName` and `vehiclePlate` are not changed, and no DockTask is created.
+
 ## 6. Location API
 
 Implemented in `backend/src/modules/locations/` (`LocationsController`, `LocationsService`).

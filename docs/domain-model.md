@@ -240,7 +240,8 @@ Content (implemented):
 
 Rules:
 
-- A shipment segment belongs to one route. A route may carry many segments. The service layer enforces this.
+- A shipment segment belongs to one non-deleted route. A route may carry many segments. The service layer enforces this. The root shipment is never on a route.
+- A `CREATED` child may be moved onto an existing `PLANNED` route that already has the same two ends (`fromLocationId` then `toLocationId`). It is taken off its current non-deleted route (that route's `shipmentIds`, both stops' `shipmentIds`, and the snapshots of its items). If that route then has no shipments, it is soft-deleted so the dock-lane index no longer holds it. The destination gains the child on its `shipmentIds` and on both existing stops, plus snapshots of the child's items. Stops are not added or reordered. No DockTask is created. A child that is already on that route, or that already has a non-deleted DockTask, is not moved.
 - A store–dock segment gets its own route. A dock–dock segment joins that direction's morning or evening route for the Vietnam calendar day ([`business-workflows.md` §5](./business-workflows.md#5-routing)).
 - Every stop is connected to a Location through its required `locationId`. The location must exist and must not be deleted.
 - Stops are embedded in the Route document. Do **not** create a separate RouteStop collection.

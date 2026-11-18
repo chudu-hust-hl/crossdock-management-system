@@ -1,7 +1,7 @@
 import { Routes } from '@angular/router';
 import { loggedInGuard } from './auth/logged-in.guard';
 
-/** One route per feature; each feature defines its list and detail routes. */
+/** One route per feature. Each feature defines its own list and detail routes. */
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'shipments' },
   {
@@ -13,6 +13,11 @@ export const routes: Routes = [
     path: 'shipments',
     canActivate: [loggedInGuard],
     loadChildren: () => import('./shipments/shipments.routes').then((m) => m.SHIPMENT_ROUTES),
+  },
+  {
+    path: 'routes',
+    canActivate: [loggedInGuard],
+    loadChildren: () => import('./routes/routes.routes').then((m) => m.ROUTE_ROUTES),
   },
   {
     path: 'locations',

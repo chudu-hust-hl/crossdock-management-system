@@ -1,0 +1,174 @@
+<p><a routerLink="/routes">← Routes</a></p>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let view = current.data;
+  @let route = view.route;
+  <h1>
+    {{ route.routeNumber }}
+    <span class="status" [attr.data-status]="route.status">{{ route.status }}</span>
+  </h1>
+
+  <dl class="fields">
+    <dt>Driver</dt>
+    <dd>{{ route.driverName }}</dd>
+    <dt>Vehicle</dt>
+    <dd>{{ route.vehiclePlate }}</dd>
+    <dt>Schedule</dt>
+    <dd>{{ scheduleLabel(route) }}</dd>
+    <dt>Appointment</dt>
+    <dd>
+      {{ (route.appointment.from | date) ?? '–' }} – {{ (route.appointment.to | date) ?? '–' }}
+    </dd>
+  </dl>
+
+  @if (canAdd(view) && !adding()) {
+    <p><button type="button" class="primary" (click)="openAdd()">Add</button></p>
+  }
+
+  @if (adding()) {
+    <section class="card">
+      <h2>Add shipments</h2>
+      @if (addError(); as message) {
+        <p class="error">{{ message }}</p>
+      }
+      @let listed = candidates();
+      @if (listed.status === 'loading') {
+        <p class="muted">Loading…</p>
+      } @else if (listed.status === 'error') {
+        <p class="error">{{ listed.message }}</p>
+      } @else if (listed.data.length === 0) {
+        <p class="muted">There is no CREATED shipment with these two ends.</p>
+      } @else {
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Shipment</th>
+              <th>Booking</th>
+              <th>Customer</th>
+              <th>Items</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of listed.data; track row.id) {
+              <tr>
+                <td>
+                  <input
+                    type="checkbox"
+                    [checked]="selected().has(row.id)"
+                    (change)="toggle(row.id, checkboxChecked($event))"
+                  />
+                </td>
+                <td>{{ row.code }}</td>
+                <td>{{ row.parentCode ?? '–' }}</td>
+                <td>{{ row.customerName ?? '–' }}</td>
+                <td class="num">{{ row.itemCount }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      <p class="inline">
+        <button
+          type="button"
+          class="primary"
+          [disabled]="saving() || selected().size === 0"
+          (click)="saveSelected(route.id)"
+        >
+          Save
+        </button>
+        <button type="button" (click)="cancelAdd()">Cancel</button>
+      </p>
+    </section>
+  }
+
+  @for (stop of stops(view); track stop.sequence) {
+    @let location = locationOf(view, stop.locationId);
+    <section class="card">
+      <h2>Stop {{ stop.sequence }}</h2>
+      <dl class="fields">
+        <dt>Sequence</dt>
+        <dd>{{ stop.sequence }}</dd>
+        <dt>Type</dt>
+        <dd>{{ stop.type }}</dd>
+        <dt>Location</dt>
+        <dd>
+          @if (location) {
+            <a [routerLink]="['/locations', location.id]">{{ location.name }}</a>
+          } @else {
+            Unknown location
+          }
+        </dd>
+        <dt>Location type</dt>
+        <dd>{{ location?.type ?? '–' }}</dd>
+        <dt>Province</dt>
+        <dd>{{ location?.address?.province ?? '–' }}</dd>
+        <dt>Appointment</dt>
+        <dd>
+          {{ (stop.appointment.from | date) ?? '–' }} – {{ (stop.appointment.to | date) ?? '–' }}
+        </dd>
+        <dt>Status</dt>
+        <dd>
+          <span class="status" [attr.data-status]="stop.status">{{ stop.status }}</span>
+        </dd>
+      </dl>
+      @let rows = shipmentsAt(view, stop);
+      @if (rows.length === 0) {
+        <p class="muted">No shipments.</p>
+      } @else {
+        <table>
+          <thead>
+            <tr>
+              <th>Shipment</th>
+              <th>Status</th>
+              <th>Customer</th>
+              <th>Items</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (shipment of rows; track shipment.id) {
+              <tr>
+                <td>
+                  <a [routerLink]="['/shipments', bookingId(shipment)]">{{ shipment.code }}</a>
+                </td>
+                <td>
+                  <span class="status" [attr.data-status]="shipment.status">{{
+                    shipment.status
+                  }}</span>
+                </td>
+                <td>{{ shipment.customerName ?? '–' }}</td>
+                <td class="num">{{ shipment.itemCount }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </section>
+  }
+
+  <h2>Snapshot</h2>
+  @for (group of snapshotGroups(view); track group.code) {
+    <p class="key">{{ group.code }}</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Barcode</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (item of group.rows; track item.itemId) {
+          <tr>
+            <td>{{ item.itemCode }}</td>
+            <td>{{ item.barcode }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+}
