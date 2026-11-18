@@ -26,7 +26,17 @@ export interface AppConfig {
   jwtSecret: string;
   /** `null` unless all three AUTH_SEED_* variables are set. */
   authSeed: AuthSeedConfig | null;
+  /**
+   * AMQP URL of RabbitMQ. `null` when RABBITMQ_URL is not set: the API still starts,
+   * and only the dock actions fail (503) because they cannot publish.
+   */
+  rabbitmqUrl: string | null;
+  /** Directory of the scan photos (proof of delivery), relative to the working directory. */
+  podDir: string;
 }
+
+/** Where scan photos are saved when POD_DIR is not set: `backend/uploads/pod`. */
+export const DEFAULT_POD_DIR = 'uploads/pod';
 
 const PRICING_VARIABLES = {
   baseFee: 'PRICING_BASE_FEE',
@@ -70,6 +80,8 @@ export default function configuration(): AppConfig {
     pricing: pricingConfiguration(),
     jwtSecret,
     authSeed: authSeedConfiguration(),
+    rabbitmqUrl: process.env.RABBITMQ_URL?.trim() || null,
+    podDir: process.env.POD_DIR?.trim() || DEFAULT_POD_DIR,
   };
 }
 

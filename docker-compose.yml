@@ -18,6 +18,26 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: cross-dock-management-rabbitmq
+    restart: unless-stopped
+    ports:
+      # Host port 5673 avoids clashing with a local RabbitMQ on 5672.
+      # Bound to 127.0.0.1 because this local broker uses the default guest user.
+      - '127.0.0.1:5673:5672'
+      - '127.0.0.1:15673:15672'
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 volumes:
   mongodb_data:
     name: cross-dock-management-mongodb-data
+  rabbitmq_data:
+    name: cross-dock-management-rabbitmq-data

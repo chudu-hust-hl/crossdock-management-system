@@ -1,6 +1,6 @@
 # Scanning flows
 
-This document is the source of truth for dock scanning and for the status changes that follow each dock action. Collections, field names, and status enums are defined in [`domain-model.md`](./domain-model.md). How a booking creates items, child shipments, and routes is defined in [`business-workflows.md`](./business-workflows.md). This flow is agreed and **not implemented**.
+This document is the source of truth for dock scanning and for the status changes that follow each dock action. Collections, field names, and status enums are defined in [`domain-model.md`](./domain-model.md). How a booking creates items, child shipments, and routes is defined in [`business-workflows.md`](./business-workflows.md). This flow is implemented in the backend `dock-tasks` module: the five endpoints, the RabbitMQ topology, and the status rollup (§11). The Angular dock screen is not built yet.
 
 Read this file before adding a scan API, a dock screen, a DockTask write, or a RabbitMQ client. Do not invent a second status machine. If a change here conflicts with `domain-model.md`, stop and ask; do not edit the domain model silently.
 
@@ -54,7 +54,7 @@ Status values already in the schemas:
 
 The route snapshot (`items` on the route) is a copy made at assignment. A scan does not change it. `driverName` and `vehiclePlate` stay the fixed placeholders.
 
-`performedBy` on a dock action is the ULID of the logged-in user ([`domain-model.md` §4.2](./domain-model.md#42-user)). Authentication is a separate, earlier step. Until those actions exist, booking still writes the placeholder ULID `01ARZ3NDEKTSV4RRFFQ69G5FAV` on a route's `createdBy`.
+`performedBy` on every task a dock action completes is the id of the logged-in caller, taken from the token ([`domain-model.md` §4.2](./domain-model.md#42-user)). A `PENDING` task has no `performedBy` until someone completes it. Booking still writes the placeholder ULID `01ARZ3NDEKTSV4RRFFQ69G5FAV` on a route's `createdBy`; the dock actions do not change it.
 
 ## 3. What the request writes, and what the queue writes
 
@@ -302,9 +302,9 @@ Replay: a single function `republishPendingRollups()` publishes again, to the sa
 - an item is `DELIVERED` while its dock–store route is not `COMPLETED`, or
 - an item is `EXCEPTION` with a `MISSING` task while the root is not `EXCEPTION`.
 
-The connection string comes from `RABBITMQ_URL`. There is no default that hides a missing variable: if the variable is absent, the process starts and the scan actions fail with a clear error when they try to publish. Booking and the read APIs do not need the broker.
+The connection string comes from `RABBITMQ_URL`. There is no default that hides a missing variable: if the variable is absent (or the broker cannot be reached at startup), the process starts and the dock actions answer `503` with a message that names `RABBITMQ_URL`, before they write anything. Booking, login, and the read APIs do not need the broker and never connect to it.
 
-Local broker, when this flow is implemented: RabbitMQ on `127.0.0.1:5672`, management UI on port `15672`. Add it to the root `docker-compose.yml` in that implementation task. Do not add it before then.
+The broker is part of local infrastructure: RabbitMQ on `127.0.0.1:5673`, management UI at `http://localhost:15673` (guest / guest). `RABBITMQ_URL` is `amqp://guest:guest@localhost:5673`. When the variable is set, the API connects at startup and declares the exchanges `crossdock.events` and `crossdock.dlx`, the queues `crossdock.rollup` (dead-letter exchange `crossdock.dlx`, dead-letter routing key `crossdock.rollup.failed`) and `crossdock.rollup.dlq`, and the bindings above, all durable. `RabbitMqService` is the only place that declares them.
 
 ## 9. What this flow does not do
 
@@ -312,7 +312,7 @@ Local broker, when this flow is implemented: RabbitMQ on `127.0.0.1:5672`, manag
 - It does not create tasks at booking time.
 - It does not move a missed item onto the next slot by itself.
 - It does not change `driverName`, `vehiclePlate`, or the route snapshot.
-- It does not require a logged-in user. `performedBy` is the placeholder ULID.
+- It does not accept an anonymous caller. Every dock action requires a token with a dock role, and `performedBy` is the caller's id. Only a route's `createdBy`, written at booking, is still the placeholder ULID.
 - It does not store the photo in an object store. `metadata.podPath` is a local path.
 - It does not add a collection for events, photos, or queues.
 - It does not add a consumer per status. Route and shipment updates stay in `crossdock.rollup`.
@@ -325,3 +325,37 @@ Local broker, when this flow is implemented: RabbitMQ on `127.0.0.1:5672`, manag
 - Reject confirm-pickup unless the route is `PLANNED` and is a store–dock route. Reject confirm-delivery unless every expected item of that dock–store route is `IN_TRANSIT` on the last leg.
 - Keep Swagger on the new endpoints, and add the consumer tests around the tables in §4 and §6: one item does not complete a shared route; a missing item lets the other items leave; the root becomes `EXCEPTION`; a second delivery of the same message does not create a second task or move a status backwards.
 - Update this file if an implementation has to deviate from it.
+
+## 11. Implementation
+
+The backend `dock-tasks` module implements this flow. Each endpoint requires a token (`401` without a valid one) and one of the roles below (`403` otherwise).
+
+| Endpoint | Roles | Body | Message |
+| --- | --- | --- | --- |
+| `POST /dock-tasks/pickup` | `SYS_ADMIN`, `DOCK_MANAGER` | `{ routeId }` | `route.pickup.confirmed`, type `MANUAL_PICKUP` |
+| `POST /dock-tasks/scan` | `SYS_ADMIN`, `DOCK_OPERATOR` | multipart: `routeId`, `locationId`, `barcode`, `photo` | `dock.scan.completed`, type `SCAN_INBOUND` or `SCAN_OUTBOUND` |
+| `POST /dock-tasks/missing` | `SYS_ADMIN`, `DOCK_MANAGER` | `{ routeId, locationId, itemId, note }` | `dock.item.missing`, type `MISSING` |
+| `POST /dock-tasks/delivery` | `SYS_ADMIN`, `DOCK_MANAGER` | `{ routeId }` | `route.delivery.confirmed`, type `MANUAL_DELIVERY` |
+| `GET /dock-tasks?locationId=&routeId=&status=` | `SYS_ADMIN`, `DOCK_MANAGER`, `DOCK_OPERATOR` | none; `status` defaults to `PENDING` | none |
+
+The four actions answer `201` with `{ completedTasks, pendingTasks }`: the tasks the request completed and the `PENDING` tasks it created. `GET` returns the route's non-deleted tasks at that Location, oldest first, each with `itemCode` and `barcode` from the route snapshot. Task numbers come from `MetadataService.nextBusinessCode(DOCK_TASK)`.
+
+**Order of the checks.** A request is validated first (`400` for the body, `404` for an unknown route, barcode, Location, or item, `409` for a state the action does not accept). Only then does it check the broker (`503`), and only then does it write. A request that fails a check writes nothing.
+
+**What the code adds to §4.**
+
+- Pickup takes the route's items that are still `CREATED`. A retried pickup therefore skips the items it already took, and answers `409` when none is left.
+- Scan: the photo must be an `image/jpeg` or `image/png` file whose first bytes match that type (`400` otherwise), at most 10 MB (`413`). It is saved as `POD_DIR/<taskId>.jpg|png` (`POD_DIR` defaults to `uploads/pod`, relative to `backend/`, and is ignored by Git). A barcode of an item that is already `EXCEPTION` is `409`.
+- Missing: the Location must be a stop of the route and the item must be in the route snapshot (`404`). An item that is already `EXCEPTION` or `DELIVERED` is `409`. When the item has no open scan task there, the leg ids follow the stop: the destination stop sets `inboundLegId`, the origin stop sets `outboundLegId`.
+- Delivery answers `409` also when the route has no expected item left.
+- If the publish fails after the writes, the request still succeeds and the error is logged. The facts are saved, so `republishPendingRollups()` sends the message again. It runs once at startup, after the consumer starts.
+
+**How the rollup reads §4 and §6.** `StatusRollupService` recomputes from every `COMPLETED` task on the route, so running a message twice writes the same values.
+
+- A stop stays `PENDING` until it is touched: an expected item is handled there, or an item is marked missing there. It is `COMPLETED` when every expected item is handled, otherwise `PROCESSING`.
+- The route leaves `PLANNED` only when an item has really left its origin or arrived at its destination. A missing mark alone does not start a route. The route is `COMPLETED` when its destination stop is.
+- "`AT_DOCK` at this leg's destination" (§6) means the item has a `COMPLETED` `SCAN_INBOUND` at that destination for this leg. An item that has already left on the next leg still counts as arrived, so leg 1 stays `AT_DOCK` while its items travel on. When the destination is the booking's `DROPOFF` point, the arrival is the manual delivery and the leg becomes `DELIVERED`.
+- A leg's origin point follows the route's origin stop once one of its items has left. Its destination point stays `PENDING` until every non-exception item of the leg has arrived, and is then `COMPLETED`.
+- A root point at one of the route's stops follows that stop once an item of this booking has left or arrived there. On a shared route it therefore completes with the stop, which is never earlier than the moment every item of the booking has been handled there.
+- The root follows the table in §6 with one reading of "forward": `IN_TRANSIT` and `AT_DOCK` alternate hop by hop, while `EXCEPTION` and `DELIVERED` are never left and `CREATED` is never returned to.
+- Each message names its tasks and items. If one of them is not on the route, the rollup fails and the message goes through the retry and the dead-letter path of §8.

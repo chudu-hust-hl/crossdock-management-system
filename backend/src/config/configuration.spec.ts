@@ -117,6 +117,32 @@ describe('configuration', () => {
     },
   );
 
+  it.each([undefined, '', '   '])(
+    'starts without RabbitMQ when RABBITMQ_URL is %j',
+    (value) => {
+      if (value === undefined) {
+        delete process.env.RABBITMQ_URL;
+      } else {
+        process.env.RABBITMQ_URL = value;
+      }
+
+      expect(configuration().rabbitmqUrl).toBeNull();
+    },
+  );
+
+  it('reads RABBITMQ_URL and POD_DIR, with a default photo directory', () => {
+    process.env.RABBITMQ_URL = 'amqp://guest:guest@localhost:5673';
+    delete process.env.POD_DIR;
+
+    expect(configuration()).toMatchObject({
+      rabbitmqUrl: 'amqp://guest:guest@localhost:5673',
+      podDir: 'uploads/pod',
+    });
+
+    process.env.POD_DIR = '/var/pod';
+    expect(configuration().podDir).toBe('/var/pod');
+  });
+
   it('still requires MONGODB_URI', () => {
     delete process.env.MONGODB_URI;
 

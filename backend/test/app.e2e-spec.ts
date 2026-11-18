@@ -11,6 +11,8 @@ describe('Health (e2e)', () => {
 
   beforeAll(async () => {
     useTestJwtSecret();
+    // Keeps this test away from a local broker: no rollup consumer, no replay.
+    process.env.RABBITMQ_URL = '';
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();

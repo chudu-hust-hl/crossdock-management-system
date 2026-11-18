@@ -55,6 +55,9 @@ out/
 *.njsproj
 *.sln
 *.swp
+# Scan photos (proof of delivery) saved by the API, see POD_DIR
+backend/uploads/pod/
+
 # ==========================================
 # Test coverage reports
 # ==========================================
@@ -67,3 +70,6 @@ coverage/
 .cursor
 .agents/
 skills-lock.json
+
+# Local thesis checklist, not a source of truth
+/checkpoint.md

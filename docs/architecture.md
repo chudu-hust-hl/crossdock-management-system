@@ -14,7 +14,7 @@ Why:
 
 Not in the initial design: microservices, caches (e.g. Redis), cloud SDKs, hardware/RFID/IoT integrations, AI/ML.
 
-Scanning is the one approved use of a message broker. Queue names, events, and the status rules are in [`scanning-flows.md`](./scanning-flows.md). That flow is agreed and not implemented. Booking, routing, and the read APIs do not publish or consume messages.
+Scanning is the one approved use of a message broker. Queue names, events, and the status rules are in [`scanning-flows.md`](./scanning-flows.md). The backend implements it with `amqplib` and no messaging framework. Only the dock actions publish, and only the rollup consumer consumes. Booking, routing, login, and the read APIs do not publish or consume messages.
 
 ## 2. Project structure
 
@@ -26,10 +26,10 @@ cross-dock-management/
 ├── frontend/                   # Angular application (npm commands run here), see §9
 ├── docs/                       # project and domain documentation
 ├── .cursor/rules/              # Cursor project rules
-└── docker-compose.yml          # local MongoDB
+└── docker-compose.yml          # local MongoDB and RabbitMQ
 ```
 
-The backend uses NestJS 11 (the newest major whose CLI supports the project's Node.js 22.14), TypeScript 6 (strict by default), Mongoose 8, `@nestjs/config`, `ulid`, `class-validator` / `class-transformer` for request validation, and `@nestjs/swagger` for the API documentation.
+The backend uses NestJS 11 (the newest major whose CLI supports the project's Node.js 22.14), TypeScript 6 (strict by default), Mongoose 8, `@nestjs/config`, `ulid`, `class-validator` / `class-transformer` for request validation, `@nestjs/swagger` for the API documentation, and `amqplib` for RabbitMQ.
 
 ```text
 backend/src/
@@ -73,7 +73,8 @@ backend/src/
     │                           #   ShipmentEditsService (the three booking-correction PUTs)
     ├── routing/                # hub selection after booking; reads provinces, updates deliveryInfos
     ├── routes/
-    ├── dock-tasks/
+    ├── dock-tasks/             # the dock actions and GET /dock-tasks (DockTasksService);
+    │                           #   RabbitMqService, DockEventsPublisher, RollupConsumer, StatusRollupService
     └── metadata/               # `metadata` collection: business-code counters
 ```
 
@@ -110,7 +111,7 @@ One NestJS feature module per domain collection. `RoutingModule` is the booking 
 Guidelines:
 
 - A module registers its own Mongoose models with `MongooseModule.forFeature(...)`.
-- Another module that needs this data imports the owning module and uses its **exported service**, rather than registering the same model again. `RoutingModule` also registers the `Shipment` model so it can save `deliveryInfos` without importing `ShipmentsModule` (that import would be a cycle). Both use the same schema on the one application connection. Cross-docks are loaded through the exported `LocationsService`.
+- Another module that needs this data imports the owning module and uses its **exported service**, rather than registering the same model again. `RoutingModule` also registers the `Shipment` model so it can save `deliveryInfos` without importing `ShipmentsModule` (that import would be a cycle). Both use the same schema on the one application connection. Cross-docks are loaded through the exported `LocationsService`. `DockTasksModule` follows the same precedent: besides `DockTask` it registers the `Item`, `Route`, and `Shipment` models, because the dock actions write items and the rollup writes route stops, routes, legs, and roots ([`scanning-flows.md` §3](./scanning-flows.md#3-what-the-request-writes-and-what-the-queue-writes)). Importing `ShipmentsModule` would pull in booking, and none of those services expose these writes.
 - There is exactly one MongoDB connection, configured once at application level.
 
 ## 4. Layer responsibilities
@@ -150,7 +151,7 @@ Guidelines:
   - `403` (`ForbiddenException`) for a valid token without an allowed role
   - `404` (`NotFoundException`) for an unknown or soft-deleted ULID (`GET /<resource>/:id`)
   - `409` (`ConflictException`) for a unique value that is already taken, e.g. an item barcode
-  - `503` (`ServiceUnavailableException`) when required configuration is missing, e.g. booking pricing
+  - `503` (`ServiceUnavailableException`) when required configuration or infrastructure is missing, e.g. booking pricing, or RabbitMQ for a dock action
 - Services handle MongoDB duplicate-key errors (`11000`) where they are expected, with `isDuplicateKeyError()` (`common/utils/mongo-error.util.ts`). Examples are the store find-or-create in `LocationsService` and the booking in `ShipmentsService`.
 - API integration tests (`test/<feature>-api.e2e-spec.ts`) boot only the feature module against their own test database and register the global pipe with `validationPipeOptions`. A module with a protected endpoint also needs `AuthModule`. `tokenFor(moduleRef, ...roles)` (`test/utils/test-auth.ts`) creates a user with those roles and signs a token for it.
 
@@ -158,7 +159,7 @@ Guidelines:
 
 - `AuthGuard` (`modules/auth/auth.guard.ts`) reads `Authorization: Bearer`, verifies the token, and loads the user. It answers `401` unless the user is `ACTIVE` and not deleted. It then sets the request user to `{ id, roles }` with the roles from the database.
 - `@Roles(...)` lists the roles that may call a handler; any one of the caller's roles is enough, otherwise `403`.
-- Both are applied per handler with `@UseGuards(AuthGuard)` (or on the whole `UsersController`). Only the writes in [`domain-model.md` §4.2](./domain-model.md#42-user) have them; everything else is public.
+- Both are applied per handler with `@UseGuards(AuthGuard)` (or on the whole `UsersController` and `DockTasksController`). Only the endpoints in [`domain-model.md` §4.2](./domain-model.md#42-user) have them; everything else is public.
 - A module whose controller uses the guard imports `UsersModule`, because the guard needs `UsersService`. `JwtService` comes from the global `JwtModule` that `AuthModule` registers.
 - `@CurrentUser()` gives a handler the caller, e.g. to stop a `SYS_ADMIN` from locking themselves.
 
@@ -191,7 +192,7 @@ The documentation is written with explicit `@nestjs/swagger` decorators, so it i
 - **Response bodies** are classes, not interfaces, because Swagger can only describe classes. Example: `LocationResponse`.
 - `config/swagger.config.spec.ts` generates the document without a database. It checks that every endpoint, response status, parameter, and required field is documented. When a controller is added, add it to this test.
 
-Implemented DTOs: `CreateLocationDto`, `AddressDto`, `LocationCandidateDto`, `ListLocationsQueryDto`, and the `LocationResponse` / `LocationPageResponse` mappings (`locations/dto/`); `CreateShipmentDto`, `ShipmentEndpointDto`, `ListShipmentsQueryDto`, `UpdateShipmentCustomerDto`, `UpdateAppointmentsDto`, `ShipmentItemParamDto`, and `ShipmentResponse` / `BookShipmentResponse` / `ShipmentSummaryResponse` / `ShipmentPageResponse` / `ShipmentViewResponse` (`shipments/dto/`); `CreateItemDto`, `UpdateItemDto`, `DimensionsDto` and `ItemResponse` (`items/dto/`); `RouteResponse` (`routes/dto/`); `CreateUserDto`, `UpdateUserDto`, `ListUsersQueryDto`, and `UserResponse` / `UserPageResponse` (`users/dto/`); `LoginDto` and `LoginResponse` (`auth/dto/`); `UlidParamDto`, `PaginationQueryDto`, `PageResponse`, and `TimeWindowDto` / `TimeWindowResponse` (`common/dto/`). See [`business-workflows.md`](./business-workflows.md) for the workflows they serve.
+Implemented DTOs: `CreateLocationDto`, `AddressDto`, `LocationCandidateDto`, `ListLocationsQueryDto`, and the `LocationResponse` / `LocationPageResponse` mappings (`locations/dto/`); `CreateShipmentDto`, `ShipmentEndpointDto`, `ListShipmentsQueryDto`, `UpdateShipmentCustomerDto`, `UpdateAppointmentsDto`, `ShipmentItemParamDto`, and `ShipmentResponse` / `BookShipmentResponse` / `ShipmentSummaryResponse` / `ShipmentPageResponse` / `ShipmentViewResponse` (`shipments/dto/`); `CreateItemDto`, `UpdateItemDto`, `DimensionsDto` and `ItemResponse` (`items/dto/`); `RouteResponse` (`routes/dto/`); `CreateUserDto`, `UpdateUserDto`, `ListUsersQueryDto`, and `UserResponse` / `UserPageResponse` (`users/dto/`); `LoginDto` and `LoginResponse` (`auth/dto/`); `RouteActionDto`, `ScanDto` / `ScanFormDto`, `MarkMissingDto`, `ListDockTasksQueryDto`, and `DockTaskResponse` / `DockTaskRowResponse` / `DockActionResponse` (`dock-tasks/dto/`); `UlidParamDto`, `PaginationQueryDto`, `PageResponse`, and `TimeWindowDto` / `TimeWindowResponse` (`common/dto/`). See [`business-workflows.md`](./business-workflows.md) for the workflows they serve.
 
 ## 5. Identifier strategy
 
@@ -208,8 +209,10 @@ See [`domain-model.md` §2](./domain-model.md#2-identifiers).
 - Configuration uses `@nestjs/config` with environment variables. At minimum: `NODE_ENV`, `PORT`, `MONGODB_URI`.
 - `CORS_ORIGIN` (default `http://localhost:4200`, the Angular dev server) is the one browser origin allowed to call the API; `main.ts` passes it to `app.enableCors()`.
 - `backend/.env.example` documents the variables; `backend/.env` is local only and ignored by Git. `MONGODB_URI` is required; the app fails at startup with a clear message if it is missing.
-- Local MongoDB runs with the root `docker-compose.yml` (`mongo:8.0`), exposed on `127.0.0.1:27018` (to avoid clashing with a local MongoDB on `27017`), with the named volume `cross-dock-management-mongodb-data`.
-- Default local URI: `mongodb://localhost:27018/cross_dock_management`.
+- Local infrastructure is the root `docker-compose.yml`. MongoDB (`mongo:8.0`) is on `127.0.0.1:27018` (to avoid clashing with a local MongoDB on `27017`), with the named volume `cross-dock-management-mongodb-data`. RabbitMQ (`rabbitmq:4-management`) is on `127.0.0.1:5673` (AMQP) and the management UI is at <http://localhost:15673> (guest / guest), with the named volume `cross-dock-management-rabbitmq-data`. Both ports are bound to `127.0.0.1` only.
+- Default local MongoDB URI: `mongodb://localhost:27018/cross_dock_management`.
+- `RABBITMQ_URL` (`amqp://guest:guest@localhost:5673`) is documented in `backend/.env.example` and read in `configuration.ts`. It is optional: without it, or when the broker is unreachable at startup, the app starts with a warning and only the dock actions answer `503`. With it, `RabbitMqService` connects at startup and declares `crossdock.events`, `crossdock.dlx`, `crossdock.rollup`, and `crossdock.rollup.dlq` ([`scanning-flows.md` §8](./scanning-flows.md#8-rabbitmq)).
+- `POD_DIR` (default `uploads/pod`, relative to `backend/`) is where the scan photos are saved. `backend/uploads/pod/` is ignored by Git.
 - A `GET /health` endpoint reports that the API process is running. It does not claim that MongoDB is healthy; a database health check may be added later.
 - Authentication is implemented: a JWT bearer token signed with `@nestjs/jwt` and passwords hashed with `bcryptjs`. There are no sessions, no refresh tokens, no Passport, and no public registration. Roles and the endpoint table are in [`domain-model.md` §4.2](./domain-model.md#42-user).
   - `JWT_SECRET` is required. The app fails at startup with a message naming it when it is missing or empty.
@@ -230,7 +233,8 @@ Schemas and relationships are designed deliberately, one entity at a time, befor
 6. Implement the Route schema. *(done)*
 7. Implement the DockTask schema. *(done)*
 8. Add DTO validation, services, APIs, and tests incrementally. *(in progress: validation setup, the Location service and API, shipment booking with items and cost (`POST /shipments/book`), routing of that shipment's delivery infos, list/detail endpoints for Locations and Shipments, the booking view, and the three booking-correction `PUT`s are done)*
-9. Add authentication (token login, user management by `SYS_ADMIN`, guards on the writes in [`domain-model.md` §4.2](./domain-model.md#42-user)). *(done, including the frontend login screen)* Scanning stays a later step ([`scanning-flows.md`](./scanning-flows.md)).
+9. Add authentication (token login, user management by `SYS_ADMIN`, guards on the writes in [`domain-model.md` §4.2](./domain-model.md#42-user)). *(done, including the frontend login screen)*
+10. Add the dock actions, the RabbitMQ topology, and the status rollup ([`scanning-flows.md`](./scanning-flows.md)). *(backend done; the Angular dock screen is a later step)*
 
 Each step should build, lint, and (where tests exist) pass tests before moving to the next.
 

@@ -4,7 +4,7 @@ This document records the agreed domain design for `cross-dock-management`. It i
 
 Field names written in `code` style are agreed. Fields described in plain words are agreed in meaning, but their exact name or type is decided when the schema is implemented (see [Open questions](#open-questions)).
 
-Field-level types, defaults, indexes, and validation are in [`schema-design.md`](./schema-design.md). Processes that span several collections (Location reuse, shipment creation, routing) are in [`business-workflows.md`](./business-workflows.md). How a scan, a missing item, a manual pickup, or a manual delivery changes Item, DockTask, Route, and Shipment status is in [`scanning-flows.md`](./scanning-flows.md). That flow is agreed and not implemented.
+Field-level types, defaults, indexes, and validation are in [`schema-design.md`](./schema-design.md). Processes that span several collections (Location reuse, shipment creation, routing) are in [`business-workflows.md`](./business-workflows.md). How a scan, a missing item, a manual pickup, or a manual delivery changes Item, DockTask, Route, and Shipment status is in [`scanning-flows.md`](./scanning-flows.md). That flow is implemented in the backend; the dock screen of the frontend is not.
 
 ## 1. Collections
 
@@ -136,8 +136,8 @@ Roles (implemented as `UserRole`). The earlier values `OPERATIONS_MANAGER` and `
 | --- | --- |
 | `SYS_ADMIN` | Everything in this table, including creating and editing users and creating Locations. |
 | `ADMIN` | Book a shipment and correct a `CREATED` booking (customer name, the two commercial appointments, and the commercial fields of an existing item). |
-| `DOCK_MANAGER` | Confirm pickup, confirm delivery, and mark an item missing, once those actions exist ([`scanning-flows.md`](./scanning-flows.md)). |
-| `DOCK_OPERATOR` | Scan in and scan out, once those actions exist. |
+| `DOCK_MANAGER` | Confirm pickup, confirm delivery, and mark an item missing ([`scanning-flows.md`](./scanning-flows.md)). List the dock tasks of a route at a Location. |
+| `DOCK_OPERATOR` | Scan in and scan out. List the dock tasks of a route at a Location. |
 
 There is no public registration. A `SYS_ADMIN` creates a user and can later change `fullName`, `email`, `roles`, `status`, and the password. `roles` must contain at least one role. A `SYS_ADMIN` cannot lock their own user or remove `SYS_ADMIN` from their own `roles`. `INACTIVE` and `LOCKED` users do not log in. Soft-deleted users do not log in.
 
@@ -152,8 +152,11 @@ Who may call an endpoint that exists today:
 | `POST /locations` | `SYS_ADMIN` |
 | `POST /shipments/book` and the three booking `PUT`s | `SYS_ADMIN` or `ADMIN` |
 | `POST /users`, `GET /users`, `GET /users/:id`, `PUT /users/:id` | `SYS_ADMIN` |
+| `POST /dock-tasks/pickup`, `POST /dock-tasks/missing`, `POST /dock-tasks/delivery` | `SYS_ADMIN` or `DOCK_MANAGER` |
+| `POST /dock-tasks/scan` | `SYS_ADMIN` or `DOCK_OPERATOR` |
+| `GET /dock-tasks` | `SYS_ADMIN`, `DOCK_MANAGER`, or `DOCK_OPERATOR` |
 
-Dock actions stay unimplemented. When they are added, `performedBy` is the id from the token. Until then, booking still writes the placeholder ULID on a route's `createdBy`.
+The dock actions are implemented ([`scanning-flows.md` §11](./scanning-flows.md#11-implementation)). `performedBy` on every task they complete is the id from the token. Booking still writes the placeholder ULID on a route's `createdBy`.
 
 ### 4.3 Item
 
@@ -305,7 +308,7 @@ Questions 1–27 are resolved and kept here for traceability. Schema-level choic
 21. ~~Routing inputs.~~ Resolved: the booking routing step reads the `provinces` collection and each Location's `address.province` ([`business-workflows.md` §5](./business-workflows.md#5-routing)). Postal-code ranges and distances are not used.
 22. ~~How a routing result is stored.~~ Resolved: the booking routing step inserts the cross-dock hubs into the root shipment's `deliveryInfos`. The same request then creates one child shipment per hop ([`business-workflows.md` §5](./business-workflows.md#5-routing)).
 26. ~~How a child shipment is placed on a route.~~ Resolved: a store–dock child gets its own route; a dock–dock child joins that direction's morning or evening route. `driverName` and `vehiclePlate` are fixed placeholder text until dispatch exists (§4.5). DockTasks are not created at assignment.
-27. ~~Who may call the API.~~ Resolved: four roles, a user may hold several, no public registration, token login (§4.2). `GET` reads stay open until the frontend has a login screen. Dock actions are not part of that implementation.
+27. ~~Who may call the API.~~ Resolved: four roles, a user may hold several, no public registration, token login (§4.2). `GET` reads stay open until the frontend has a login screen. Dock actions were added later, with the roles in §4.2.
 23. ~~Same pickup and drop-off.~~ Resolved: the request is rejected.
 24. ~~Appointments at creation.~~ Resolved: pickup and drop-off appointments are supplied when the shipment is created (added to `CreateShipmentDto` with the shipment task).
 25. ~~Items in a booking.~~ Resolved: every booking creates new Items with a required `itemUnit` (`BOX`, `PALLET`, `KEG`, `BAG`). Existing Items are never reused for a new shipment; the same Items are used through the shipment's routing and planning.

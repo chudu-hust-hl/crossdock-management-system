@@ -5,6 +5,8 @@ import { OpenAPIObject, SchemaObject } from '@nestjs/swagger';
 import { HealthController } from '../health/health.controller';
 import { AuthController } from '../modules/auth/auth.controller';
 import { AuthService } from '../modules/auth/auth.service';
+import { DockTasksController } from '../modules/dock-tasks/dock-tasks.controller';
+import { DockTasksService } from '../modules/dock-tasks/dock-tasks.service';
 import { LocationsController } from '../modules/locations/locations.controller';
 import { LocationsService } from '../modules/locations/locations.service';
 import { ShipmentEditsService } from '../modules/shipments/shipment-edits.service';
@@ -29,8 +31,10 @@ describe('Swagger document', () => {
         LocationsController,
         ShipmentsController,
         UsersController,
+        DockTasksController,
       ],
       providers: [
+        { provide: DockTasksService, useValue: {} },
         { provide: AuthService, useValue: {} },
         { provide: UsersService, useValue: {} },
         { provide: JwtService, useValue: {} },
@@ -51,6 +55,11 @@ describe('Swagger document', () => {
   it('documents every endpoint', () => {
     expect(Object.keys(document.paths).sort()).toEqual([
       '/auth/login',
+      '/dock-tasks',
+      '/dock-tasks/delivery',
+      '/dock-tasks/missing',
+      '/dock-tasks/pickup',
+      '/dock-tasks/scan',
       '/health',
       '/locations',
       '/locations/{id}',
@@ -191,8 +200,13 @@ describe('Swagger document', () => {
       .map(({ route }) => route)
       .sort();
     expect(secured).toEqual([
+      'GET /dock-tasks',
       'GET /users',
       'GET /users/{id}',
+      'POST /dock-tasks/delivery',
+      'POST /dock-tasks/missing',
+      'POST /dock-tasks/pickup',
+      'POST /dock-tasks/scan',
       'POST /locations',
       'POST /shipments/book',
       'POST /users',
@@ -300,6 +314,100 @@ describe('Swagger document', () => {
       'email',
       'createdAt',
       'updatedAt',
+    ]);
+  });
+
+  it('documents the dock actions and the dock task list', () => {
+    const responses = (path: string, method: 'get' | 'post') =>
+      Object.keys(document.paths[path][method]!.responses).sort();
+    const actionRef = {
+      $ref: '#/components/schemas/DockActionResponse',
+    };
+
+    for (const action of ['pickup', 'missing', 'delivery']) {
+      const path = `/dock-tasks/${action}`;
+      expect([path, responses(path, 'post')]).toEqual([
+        path,
+        ['201', '400', '401', '403', '404', '409', '503'],
+      ]);
+    }
+    expect(responses('/dock-tasks/scan', 'post')).toEqual([
+      '201',
+      '400',
+      '401',
+      '403',
+      '404',
+      '409',
+      '413',
+      '503',
+    ]);
+    expect(responses('/dock-tasks', 'get')).toEqual([
+      '200',
+      '400',
+      '401',
+      '403',
+      '404',
+    ]);
+    for (const action of ['pickup', 'scan', 'missing', 'delivery']) {
+      const created = document.paths[`/dock-tasks/${action}`].post!.responses[
+        '201'
+      ] as {
+        content: Record<string, { schema: unknown }>;
+      };
+      expect(created.content['application/json'].schema).toEqual(actionRef);
+    }
+    const listed = document.paths['/dock-tasks'].get!.responses['200'] as {
+      content: Record<string, { schema: unknown }>;
+    };
+    expect(listed.content['application/json'].schema).toEqual({
+      type: 'array',
+      items: { $ref: '#/components/schemas/DockTaskRowResponse' },
+    });
+
+    const scanBody = document.paths['/dock-tasks/scan'].post!.requestBody as {
+      content: Record<string, { schema: unknown }>;
+    };
+    expect(Object.keys(scanBody.content)).toEqual(['multipart/form-data']);
+    expect(schema('ScanFormDto').required).toEqual([
+      'routeId',
+      'locationId',
+      'barcode',
+      'photo',
+    ]);
+    expect(schema('ScanFormDto').properties!.photo).toMatchObject({
+      type: 'string',
+      format: 'binary',
+    });
+    expect(schema('RouteActionDto').required).toEqual(['routeId']);
+    expect(schema('MarkMissingDto').required).toEqual([
+      'routeId',
+      'locationId',
+      'itemId',
+      'note',
+    ]);
+    expect(schema('DockActionResponse').required).toEqual([
+      'completedTasks',
+      'pendingTasks',
+    ]);
+    expect(schema('DockTaskRowResponse').required).toEqual(
+      expect.arrayContaining(['id', 'taskNumber', 'itemCode', 'barcode']),
+    );
+
+    const query = document.paths['/dock-tasks'].get!.parameters as {
+      name: string;
+      required: boolean;
+    }[];
+    expect(query.map((p) => [p.name, p.required])).toEqual([
+      ['locationId', true],
+      ['routeId', true],
+      ['status', false],
+    ]);
+    expect(schema('DockTaskStatus').enum).toEqual([
+      'PENDING',
+      'IN_PROGRESS',
+      'COMPLETED',
+      'FAILED',
+      'CANCELLED',
     ]);
   });
 
