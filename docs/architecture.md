@@ -254,7 +254,7 @@ frontend/src/
 └── app/
     ├── app.ts / app.html       # shell: header with navigation and the user, <router-outlet>
     ├── app.config.ts           # router, the one HttpClient (with authInterceptor), date format
-    ├── app.routes.ts           # /login, and one lazy, guarded route per feature: /shipments, /routes, /locations
+    ├── app.routes.ts           # /login, and one lazy, guarded route per feature: /shipments, /routes, /docks, /locations
     ├── auth/
     │   ├── session.ts          # Session: the token and user, kept in localStorage until expiry
     │   ├── auth.interceptor.ts # sends Authorization: Bearer; a 401 ends the session
@@ -269,6 +269,7 @@ frontend/src/
     │   └── pager.ts            # Previous / Next for the lists
     ├── shipments/              # shipments.routes.ts, shipment-list, shipment-detail
     ├── routes/                 # routes.routes.ts, route-list, route-detail
+    ├── docks/                  # docks.routes.ts, dock-list, dock-location, dock-work
     └── locations/              # locations.routes.ts, location-list, location-detail
 ```
 
@@ -283,11 +284,13 @@ frontend/src/
   - The shipments list shows bookings only. It always sends `isRoot=true`, and opening it without `isRoot=true` in the URL replaces the URL with one that has it. Its filters are code, customer and status. Each row shows the code, status and "Not routed" when there is no `TRANSIT` point, then the origin → destination stores, the two appointments, and the customer, cost and items (three items, then "+N").
   - The booking detail calls `GET /shipments/:id/view`. It shows the path, the items, and each leg with its routes. Location names link to their Location.
   - On a `CREATED` booking it can edit the customer name, the pickup or drop-off window (the `PUT` always sends both), and one item. One editor is open at a time. Save is disabled while it runs, the page reloads the view on success, and an error is shown above the editor. A `TRANSIT` row and a route's Edit stay disabled, and every Edit is disabled on a booking that is not `CREATED`.
-  - The routes list filters by route number, status, service date and slot. A dock–dock row shows the slot and the service date; a row without them says Dedicated. The detail calls `GET /routes/:id` and shows the two stops, the shipments on each stop, and the item snapshot grouped by shipment code. On a `PLANNED` route, a `SYS_ADMIN` or `DOCK_MANAGER` can open one panel, pick candidates from `GET /routes/:id/candidates`, and move them with `POST /routes/:id/shipments`. The page reloads the detail on success. Stops, locations, the driver and the vehicle are not edited.
+  - The routes list filters by route number, status, service date and slot. A dock–dock row shows the slot and the service date; a row without them says Dedicated. The detail calls `GET /routes/:id` and shows the two stops, the shipments on each stop, and the item snapshot grouped by shipment code. On a `PLANNED` route, a `SYS_ADMIN` or `DOCK_MANAGER` can open one panel, pick candidates from `GET /routes/:id/candidates`, and move them with `POST /routes/:id/shipments`. The page reloads the detail on success. Stops, locations, the driver and the vehicle are not edited. Scanning is not added to this page.
+  - The dock desk ([`scanning-flows.md` §12](./scanning-flows.md#12-dock-desk)) is `/docks`, `/docks/:locationId`, and `/docks/:locationId/routes/:routeId`. `/docks` lists cross-docks from `GET /locations?type=CROSS_DOCK`. A dock shows an inbound list and an outbound list, both from `GET /docks/:locationId/routes`, with the route filters and page in the URL. A missing `direction` on the work page returns to the dock. The heading uses `GET /routes/:id` for the route number and the dock list for the other end and stop status. A `SYS_ADMIN`, `DOCK_MANAGER`, or `DOCK_OPERATOR` also sees `GET /dock-tasks`. Anyone else sees that they cannot work this dock, and that request is not sent. The scan form is on the page with its button disabled. The page does not call scan, pickup, missing, or delivery.
 - **State in the URL:** a list's filters and page are query parameters, e.g. `/shipments?isRoot=true&page=2`. Each change of the URL loads the list again, so reload and the back button keep the list. The page size is fixed at 20.
 - **Loading, empty, error:** every page shows `Loading…`, then the data, a "No … found." line, or the error. The error text is the `message` from Nest's error body (validation messages joined with `;`), or "Cannot reach the API" when there is no response.
 - **Styling:** `styles.css` is the only stylesheet; components have none. The `@schematics/angular:component` default in `angular.json` is `style: none`.
   - `:root` variables: text, muted, background, accent, and error colours, one spacing step, and one border.
   - No rounded corners, shadows or gradients.
+  - Below 800px the header stacks, each filter fills the width, and a table row becomes a card (`data-label` on the cell). The dock work page keeps a 56px scan button. Phone fields use 16px type so the browser does not zoom in on focus.
   - The accent marks only the active navigation item, the primary button, and the arrow between origin and destination in the shipments list.
 - **Commands** (in `frontend/`): `npm start` (dev server on <http://localhost:4200>), `npm run build`, `npm test` (Vitest).

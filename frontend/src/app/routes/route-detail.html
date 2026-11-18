@@ -57,17 +57,17 @@
           <tbody>
             @for (row of listed.data; track row.id) {
               <tr>
-                <td>
+                <td data-label="Select">
                   <input
                     type="checkbox"
                     [checked]="selected().has(row.id)"
                     (change)="toggle(row.id, checkboxChecked($event))"
                   />
                 </td>
-                <td>{{ row.code }}</td>
-                <td>{{ row.parentCode ?? '–' }}</td>
-                <td>{{ row.customerName ?? '–' }}</td>
-                <td class="num">{{ row.itemCount }}</td>
+                <td data-label="Shipment">{{ row.code }}</td>
+                <td data-label="Booking">{{ row.parentCode ?? '–' }}</td>
+                <td data-label="Customer">{{ row.customerName ?? '–' }}</td>
+                <td class="num" data-label="Items">{{ row.itemCount }}</td>
               </tr>
             }
           </tbody>
@@ -133,16 +133,16 @@
           <tbody>
             @for (shipment of rows; track shipment.id) {
               <tr>
-                <td>
+                <td data-label="Shipment">
                   <a [routerLink]="['/shipments', bookingId(shipment)]">{{ shipment.code }}</a>
                 </td>
-                <td>
+                <td data-label="Status">
                   <span class="status" [attr.data-status]="shipment.status">{{
                     shipment.status
                   }}</span>
                 </td>
-                <td>{{ shipment.customerName ?? '–' }}</td>
-                <td class="num">{{ shipment.itemCount }}</td>
+                <td data-label="Customer">{{ shipment.customerName ?? '–' }}</td>
+                <td class="num" data-label="Items">{{ shipment.itemCount }}</td>
               </tr>
             }
           </tbody>
@@ -164,8 +164,8 @@
       <tbody>
         @for (item of group.rows; track item.itemId) {
           <tr>
-            <td>{{ item.itemCode }}</td>
-            <td>{{ item.barcode }}</td>
+            <td data-label="Item">{{ item.itemCode }}</td>
+            <td data-label="Barcode">{{ item.barcode }}</td>
           </tr>
         }
       </tbody>

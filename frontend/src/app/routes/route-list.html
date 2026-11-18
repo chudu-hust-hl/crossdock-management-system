@@ -31,8 +31,10 @@
       }
     </select>
   </label>
-  <button type="submit" class="primary">Search</button>
-  <button type="button" (click)="clear()">Clear</button>
+  <div class="filter-actions">
+    <button type="submit" class="primary">Search</button>
+    <button type="button" (click)="clear()">Clear</button>
+  </div>
 </form>
 
 @let current = state();
@@ -60,19 +62,19 @@
       <tbody>
         @for (route of page.items; track route.id) {
           <tr>
-            <td>
+            <td data-label="Route">
               <a class="key" [routerLink]="route.id">{{ route.routeNumber }}</a>
             </td>
-            <td>
+            <td data-label="Status">
               <span class="status" [attr.data-status]="route.status">{{ route.status }}</span>
             </td>
-            <td class="lane">
+            <td class="lane" data-label="Lane">
               {{ placeLabel(route.from) }} <span>→</span> {{ placeLabel(route.to) }}
             </td>
-            <td>{{ scheduleLabel(route) }}</td>
-            <td class="num">{{ route.shipmentCount }}</td>
-            <td>{{ route.driverName }}</td>
-            <td>{{ route.vehiclePlate }}</td>
+            <td data-label="Schedule">{{ scheduleLabel(route) }}</td>
+            <td class="num" data-label="Shipments">{{ route.shipmentCount }}</td>
+            <td data-label="Driver">{{ route.driverName }}</td>
+            <td data-label="Vehicle">{{ route.vehiclePlate }}</td>
           </tr>
         }
       </tbody>

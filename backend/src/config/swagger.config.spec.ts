@@ -9,6 +9,7 @@ import { DockTasksController } from '../modules/dock-tasks/dock-tasks.controller
 import { DockTasksService } from '../modules/dock-tasks/dock-tasks.service';
 import { LocationsController } from '../modules/locations/locations.controller';
 import { LocationsService } from '../modules/locations/locations.service';
+import { DocksController } from '../modules/routes/docks.controller';
 import { RoutesController } from '../modules/routes/routes.controller';
 import { RoutesService } from '../modules/routes/routes.service';
 import { ShipmentEditsService } from '../modules/shipments/shipment-edits.service';
@@ -35,6 +36,7 @@ describe('Swagger document', () => {
         ShipmentsController,
         UsersController,
         DockTasksController,
+        DocksController,
       ],
       providers: [
         { provide: DockTasksService, useValue: {} },
@@ -64,6 +66,7 @@ describe('Swagger document', () => {
       '/dock-tasks/missing',
       '/dock-tasks/pickup',
       '/dock-tasks/scan',
+      '/docks/{locationId}/routes',
       '/health',
       '/locations',
       '/locations/{id}',
@@ -586,6 +589,59 @@ describe('Swagger document', () => {
       'itemCount',
     ]);
     expect(schema('AddRouteShipmentsDto').required).toEqual(['shipmentIds']);
+  });
+
+  it('documents the dock route list', () => {
+    const operation = document.paths['/docks/{locationId}/routes'].get!;
+    expect(Object.keys(operation.responses).sort()).toEqual([
+      '200',
+      '400',
+      '404',
+    ]);
+    const parameters = operation.parameters as {
+      name: string;
+      in: string;
+      required: boolean;
+    }[];
+    expect(parameters.filter((parameter) => parameter.in === 'path')).toEqual([
+      expect.objectContaining({ name: 'locationId', required: true }),
+    ]);
+    expect(
+      parameters
+        .filter((parameter) => parameter.in === 'query')
+        .map((parameter) => [parameter.name, parameter.required]),
+    ).toEqual([
+      ['page', false],
+      ['limit', false],
+      ['status', false],
+      ['routeNumber', false],
+      ['serviceDate', false],
+      ['slot', false],
+      ['direction', true],
+    ]);
+    expect(schema('DockDirection').enum).toEqual(['inbound', 'outbound']);
+    expect(schema('DockRoutePageResponse').required).toEqual([
+      'page',
+      'limit',
+      'total',
+      'items',
+    ]);
+    expect(schema('DockRouteResponse').required).toEqual([
+      'id',
+      'routeNumber',
+      'status',
+      'appointment',
+      'shipmentCount',
+      'otherEnd',
+      'stopSequence',
+      'stopStatus',
+      'pendingTaskCount',
+    ]);
+    expect(schema('DockRouteEndResponse').required).toEqual([
+      'id',
+      'name',
+      'province',
+    ]);
   });
 
   it('describes the create body with its required fields', () => {

@@ -169,6 +169,49 @@ export interface RouteEnd {
   province: string | null;
 }
 
+export const DOCK_DIRECTIONS = ['inbound', 'outbound'] as const;
+export type DockDirection = (typeof DOCK_DIRECTIONS)[number];
+
+/** `DockRouteEndResponse`: the stop that is not this dock. */
+export interface DockRouteEnd {
+  id: string;
+  name: string | null;
+  province: string | null;
+}
+
+/** `DockRouteResponse`: one row of `GET /docks/:locationId/routes`. */
+export interface DockRoute {
+  id: string;
+  routeNumber: string;
+  status: RouteStatus;
+  /** Set with `slot` on a dock–dock route; absent on a dedicated route. */
+  serviceDate?: string;
+  slot?: RouteSlot;
+  appointment: TimeWindow;
+  shipmentCount: number;
+  otherEnd: DockRouteEnd;
+  /** `2` inbound, `1` outbound. */
+  stopSequence: number;
+  stopStatus: DeliveryInfo['status'];
+  pendingTaskCount: number;
+}
+
+export const DOCK_TASK_TYPES = [
+  'SCAN_INBOUND',
+  'SCAN_OUTBOUND',
+  'PHOTO',
+  'INSPECTION',
+  'EXCEPTION',
+] as const;
+
+/** One row of `GET /dock-tasks`. The list defaults to PENDING tasks. */
+export interface DockTaskRow {
+  id: string;
+  type: (typeof DOCK_TASK_TYPES)[number];
+  itemCode: string | null;
+  barcode: string | null;
+}
+
 /** `RouteSummaryResponse`: one row of `GET /routes`. */
 export interface RouteSummary {
   id: string;

@@ -1,0 +1,149 @@
+@let dock = location();
+@if (dock.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (dock.status === 'error') {
+  <p class="error">{{ dock.message }}</p>
+} @else {
+  <h1>{{ dock.data.name }}</h1>
+
+  <form class="filters" (submit)="search($event)">
+    <label>
+      Route number
+      <input name="routeNumber" [value]="params().get('routeNumber') ?? ''" />
+    </label>
+    <label>
+      Status
+      <select name="status">
+        <option value="">All</option>
+        @for (status of statuses; track status) {
+          <option [value]="status" [selected]="params().get('status') === status">
+            {{ status }}
+          </option>
+        }
+      </select>
+    </label>
+    <label>
+      Service date
+      <input type="date" name="serviceDate" [value]="params().get('serviceDate') ?? ''" />
+    </label>
+    <label>
+      Slot
+      <select name="slot">
+        <option value="">All</option>
+        @for (slot of slots; track slot) {
+          <option [value]="slot" [selected]="params().get('slot') === slot">
+            {{ slot }}
+          </option>
+        }
+      </select>
+    </label>
+    <div class="filter-actions">
+      <button type="submit" class="primary">Search</button>
+      <button type="button" (click)="clear()">Clear</button>
+    </div>
+  </form>
+
+  <section>
+    <h2>Inbound</h2>
+    @let coming = inbound();
+    @if (coming.status === 'loading') {
+      <p class="muted">Loading…</p>
+    } @else if (coming.status === 'error') {
+      <p class="error">{{ coming.message }}</p>
+    } @else {
+      @let page = coming.data;
+      @if (page.items.length === 0) {
+        <p class="muted">No routes found.</p>
+      } @else {
+        <table>
+          <thead>
+            <tr>
+              <th>Route</th>
+              <th>Other end</th>
+              <th>Schedule</th>
+              <th>Stop</th>
+              <th>Shipments</th>
+              <th>Pending</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (route of page.items; track route.id) {
+              <tr>
+                <td data-label="Route">
+                  <a
+                    class="key"
+                    [routerLink]="['routes', route.id]"
+                    [queryParams]="{ direction: 'inbound' }"
+                    >{{ route.routeNumber }}</a
+                  >
+                </td>
+                <td data-label="Other end">{{ placeLabel(route.otherEnd) }}</td>
+                <td data-label="Schedule">{{ scheduleLabel(route) }}</td>
+                <td data-label="Stop">
+                  <span class="status" [attr.data-status]="route.stopStatus">{{
+                    route.stopStatus
+                  }}</span>
+                </td>
+                <td class="num" data-label="Shipments">{{ route.shipmentCount }}</td>
+                <td class="num" data-label="Pending">{{ route.pendingTaskCount }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      <app-pager [page]="page.page" [limit]="page.limit" [total]="page.total" />
+    }
+  </section>
+
+  <section>
+    <h2>Outbound</h2>
+    @let leaving = outbound();
+    @if (leaving.status === 'loading') {
+      <p class="muted">Loading…</p>
+    } @else if (leaving.status === 'error') {
+      <p class="error">{{ leaving.message }}</p>
+    } @else {
+      @let page = leaving.data;
+      @if (page.items.length === 0) {
+        <p class="muted">No routes found.</p>
+      } @else {
+        <table>
+          <thead>
+            <tr>
+              <th>Route</th>
+              <th>Other end</th>
+              <th>Schedule</th>
+              <th>Stop</th>
+              <th>Shipments</th>
+              <th>Pending</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (route of page.items; track route.id) {
+              <tr>
+                <td data-label="Route">
+                  <a
+                    class="key"
+                    [routerLink]="['routes', route.id]"
+                    [queryParams]="{ direction: 'outbound' }"
+                    >{{ route.routeNumber }}</a
+                  >
+                </td>
+                <td data-label="Other end">{{ placeLabel(route.otherEnd) }}</td>
+                <td data-label="Schedule">{{ scheduleLabel(route) }}</td>
+                <td data-label="Stop">
+                  <span class="status" [attr.data-status]="route.stopStatus">{{
+                    route.stopStatus
+                  }}</span>
+                </td>
+                <td class="num" data-label="Shipments">{{ route.shipmentCount }}</td>
+                <td class="num" data-label="Pending">{{ route.pendingTaskCount }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+      <app-pager [page]="page.page" [limit]="page.limit" [total]="page.total" />
+    }
+  </section>
+}

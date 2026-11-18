@@ -2,7 +2,7 @@ import { Component, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { switchMap } from 'rxjs';
-import { ROUTE_SLOTS, ROUTE_STATUSES, RouteEnd, RouteSummary } from '../api/api.models';
+import { ROUTE_SLOTS, ROUTE_STATUSES, RouteSummary } from '../api/api.models';
 import { ApiService } from '../api/api.service';
 import { load, LOADING } from '../api/load-state';
 import { filtersFromForm, queryFromUrl } from '../shared/list-query';
@@ -52,7 +52,7 @@ export class RouteList {
 }
 
 /** `Hanoi Dock, Hanoi`, or `Unknown location` when the Location was not found. */
-export function placeLabel(end: RouteEnd): string {
+export function placeLabel(end: { name: string | null; province: string | null }): string {
   if (!end.name) {
     return 'Unknown location';
   }

@@ -9,6 +9,7 @@ import { LocationsModule } from '../locations/locations.module';
 import { MetadataModule } from '../metadata/metadata.module';
 import { Shipment, ShipmentSchema } from '../shipments/schemas/shipment.schema';
 import { UsersModule } from '../users/users.module';
+import { DocksController } from './docks.controller';
 import { RoutesController } from './routes.controller';
 import { RoutesService } from './routes.service';
 import { Route, RouteSchema } from './schemas/route.schema';
@@ -31,7 +32,7 @@ import { Route, RouteSchema } from './schemas/route.schema';
     // For AuthGuard on POST /routes/:id/shipments.
     UsersModule,
   ],
-  controllers: [RoutesController],
+  controllers: [RoutesController, DocksController],
   providers: [RoutesService],
   exports: [RoutesService],
 })

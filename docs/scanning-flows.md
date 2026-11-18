@@ -1,6 +1,6 @@
 # Scanning flows
 
-This document is the source of truth for dock scanning and for the status changes that follow each dock action. Collections, field names, and status enums are defined in [`domain-model.md`](./domain-model.md). How a booking creates items, child shipments, and routes is defined in [`business-workflows.md`](./business-workflows.md). This flow is implemented in the backend `dock-tasks` module: the five endpoints, the RabbitMQ topology, and the status rollup (§11). The Angular dock screen is not built yet.
+This document is the source of truth for dock scanning and for the status changes that follow each dock action. Collections, field names, and status enums are defined in [`domain-model.md`](./domain-model.md). How a booking creates items, child shipments, and routes is defined in [`business-workflows.md`](./business-workflows.md). This flow is implemented in the backend `dock-tasks` module: the five endpoints, the RabbitMQ topology, and the status rollup (§11). The dock desk, where a person works one cross-dock, is specified in §12. Its screens are built. Scanning from the work page is not. Scanning stays off the route page.
 
 Read this file before adding a scan API, a dock screen, a DockTask write, or a RabbitMQ client. Do not invent a second status machine. If a change here conflicts with `domain-model.md`, stop and ask; do not edit the domain model silently.
 
@@ -359,3 +359,42 @@ The four actions answer `201` with `{ completedTasks, pendingTasks }`: the tasks
 - A root point at one of the route's stops follows that stop once an item of this booking has left or arrived there. On a shared route it therefore completes with the stop, which is never earlier than the moment every item of the booking has been handled there.
 - The root follows the table in §6 with one reading of "forward": `IN_TRANSIT` and `AT_DOCK` alternate hop by hop, while `EXCEPTION` and `DELIVERED` are never left and `CREATED` is never returned to.
 - Each message names its tasks and items. If one of them is not on the route, the rollup fails and the message goes through the retry and the dead-letter path of §8.
+
+## 12. Dock desk
+
+A person works at one cross-dock. The route list is how they find a trip. The dock desk is where they handle the goods of that trip at their own dock. The screens below are built. Scanning from the work page is not. This section does not add a collection and it does not change the scan rules in §4.
+
+**Which routes belong to a dock.** A route has two stops. At location L:
+
+- Inbound: `toLocationId` is L. The work here is scan in (§4.2).
+- Outbound: `fromLocationId` is L. The work here is scan out (§4.3).
+
+A dock–dock route is outbound at its origin dock and inbound at its destination dock. Confirm pickup and confirm delivery happen at the stores, so they stay on the route page. They are not actions of the dock desk.
+
+`GET /docks/:locationId/routes` lists the non-deleted routes for that dock. `:locationId` must be the ULID of a non-deleted `CROSS_DOCK`. Anything else is `404`. The query requires `direction`: `inbound` or `outbound`. The other filters are the same as `GET /routes`: `status`, `routeNumber`, `serviceDate`, `slot`, `page`, `limit`. Sort stays `appointment.from` ascending, then `id`.
+
+Each row is a `DockRouteResponse`:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `routeNumber`, `status` | The route. |
+| `serviceDate`, `slot` | Set on a dock–dock route. Absent on a store–dock route. |
+| `appointment` | The route window. |
+| `shipmentCount` | `shipmentIds.length`. |
+| `otherEnd` | `{ id, name, province }` of the stop that is not L. Inbound: stop 1. Outbound: stop 2. |
+| `stopSequence` | `2` for inbound, `1` for outbound. |
+| `stopStatus` | Status of the stop at L. |
+| `pendingTaskCount` | Non-deleted `PENDING` dock tasks with this `routeId` and `locationId` L. |
+
+Locations for the page are loaded with one `find({ id: { $in } })`. Pending counts are loaded with one query grouped by `routeId`, using the index on `routeId`, `locationId`, and `status`. A missing other end keeps its id and null name and province.
+
+The endpoint is public, like `GET /routes`. Swagger documents it. No scan behavior changes.
+
+**Screen.** `/docks` lists `CROSS_DOCK` locations from `GET /locations?type=CROSS_DOCK`. `/docks/:locationId` shows the inbound list and the outbound list, each calling this endpoint. A row opens `/docks/:locationId/routes/:routeId?direction=inbound` or `outbound`.
+
+That work page is the place where scanning will be added later. This step does not call `POST /dock-tasks/scan`, pickup, missing, or delivery. It does prepare the page:
+
+- The heading is the route number, the direction, the other end, and `stopStatus`.
+- When the logged-in user is `SYS_ADMIN`, `DOCK_MANAGER`, or `DOCK_OPERATOR`, the page loads `GET /dock-tasks?locationId=&routeId=` and shows the pending rows (`itemCode`, barcode, task type). Anyone else sees the heading and the text that they cannot work this dock. The task request is not sent.
+- A scan form sits under the table: barcode, photo, and a submit button. The button is disabled and its title says scanning is not on this screen yet. Mark missing is not shown yet.
+- After a later scan returns `201`, this page replaces the task rows from `pendingTasks` immediately. It then reloads `GET /docks/:locationId/routes` for this direction a few times, about half a second apart, and stops when `stopStatus` changes or a few seconds pass. It does not write `IN_PROGRESS` or `COMPLETED` itself. A `503` leaves the task rows as they were. That behavior is not built in this step. The disabled form is the space it will occupy.

@@ -143,7 +143,7 @@ There is no public registration. A `SYS_ADMIN` creates a user and can later chan
 
 Login (`POST /auth/login`, implemented) checks the email, ignoring case, and the password against its bcrypt hash, and returns a signed JWT. The token carries the user's ULID `id` (`sub`) and their `roles`. It expires 8 hours after it is issued. The client sends it as `Authorization: Bearer`. A wrong email, a wrong password, and an `INACTIVE`, `LOCKED` or soft-deleted user all get the same `401` "Invalid email or password." On a protected endpoint, a missing or invalid token is `401`, and so is a token whose user was locked or deleted after login. A valid token without an allowed role is `403`. The check uses the user's current roles from the database.
 
-Who may call an endpoint that exists today:
+Who may call an endpoint:
 
 | Endpoint | Who |
 | --- | --- |
@@ -155,6 +155,7 @@ Who may call an endpoint that exists today:
 | `POST /dock-tasks/pickup`, `POST /dock-tasks/missing`, `POST /dock-tasks/delivery` | `SYS_ADMIN` or `DOCK_MANAGER` |
 | `POST /dock-tasks/scan` | `SYS_ADMIN` or `DOCK_OPERATOR` |
 | `GET /dock-tasks` | `SYS_ADMIN`, `DOCK_MANAGER`, or `DOCK_OPERATOR` |
+| `GET /docks/:locationId/routes` | Anyone, no token. Lists inbound or outbound routes of one `CROSS_DOCK` ([`scanning-flows.md` §12](./scanning-flows.md#12-dock-desk)). |
 
 The dock actions are implemented ([`scanning-flows.md` §11](./scanning-flows.md#11-implementation)). `performedBy` on every task they complete is the id from the token. Booking still writes the placeholder ULID on a route's `createdBy`.
 

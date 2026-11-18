@@ -77,16 +77,16 @@
           </tr>
         }
         <tr>
-          <td class="num">{{ point.sequence }}</td>
-          <td [class.key]="end !== null">{{ point.type }}</td>
-          <td>
+          <td class="num" data-label="#">{{ point.sequence }}</td>
+          <td data-label="Type" [class.key]="end !== null">{{ point.type }}</td>
+          <td data-label="Location">
             <a [routerLink]="['/locations', point.locationId]">{{
               locationName(point.locationId)
             }}</a>
           </td>
-          <td>{{ place?.type ?? '–' }}</td>
-          <td>{{ place?.address?.province ?? '–' }}</td>
-          <td>
+          <td data-label="Location type">{{ place?.type ?? '–' }}</td>
+          <td data-label="Province">{{ place?.address?.province ?? '–' }}</td>
+          <td data-label="Appointment">
             @if (editing) {
               <span class="inline">
                 <input
@@ -112,10 +112,10 @@
               –
             }
           </td>
-          <td>
+          <td data-label="Status">
             <span class="status" [attr.data-status]="point.status">{{ point.status }}</span>
           </td>
-          <td>
+          <td data-label="Edit">
             @if (editing && end) {
               <form
                 id="appointment-editor"
@@ -182,10 +182,10 @@
             </tr>
           }
           <tr>
-            <td class="key">{{ item.itemCode }}</td>
-            <td>{{ item.barcode }}</td>
+            <td class="key" data-label="Code">{{ item.itemCode }}</td>
+            <td data-label="Barcode">{{ item.barcode }}</td>
             @if (editing) {
-              <td>
+              <td data-label="Description">
                 <input
                   form="item-editor"
                   name="description"
@@ -193,14 +193,14 @@
                   [value]="item.description ?? ''"
                 />
               </td>
-              <td>
+              <td data-label="Unit">
                 <select form="item-editor" name="itemUnit">
                   @for (unit of itemUnits; track unit) {
                     <option [value]="unit" [selected]="unit === item.itemUnit">{{ unit }}</option>
                   }
                 </select>
               </td>
-              <td>
+              <td data-label="Weight">
                 <span class="inline">
                   <input
                     form="item-editor"
@@ -219,7 +219,7 @@
                   </select>
                 </span>
               </td>
-              <td>
+              <td data-label="Dimensions">
                 <span class="inline">
                   <input
                     form="item-editor"
@@ -257,10 +257,10 @@
                 </span>
               </td>
             } @else {
-              <td>{{ item.description ?? '–' }}</td>
-              <td>{{ item.itemUnit }}</td>
-              <td>{{ item.weight ?? '–' }} {{ item.weightUnit }}</td>
-              <td>
+              <td data-label="Description">{{ item.description ?? '–' }}</td>
+              <td data-label="Unit">{{ item.itemUnit }}</td>
+              <td data-label="Weight">{{ item.weight ?? '–' }} {{ item.weightUnit }}</td>
+              <td data-label="Dimensions">
                 @if (item.dimensions; as size) {
                   {{ size.length }} × {{ size.width }} × {{ size.height }} {{ size.unit }}
                 } @else {
@@ -268,11 +268,11 @@
                 }
               </td>
             }
-            <td>
+            <td data-label="Status">
               <span class="status" [attr.data-status]="item.status">{{ item.status }}</span>
             </td>
-            <td>{{ locationName(item.currentLocationId) }}</td>
-            <td>
+            <td data-label="Current location">{{ locationName(item.currentLocationId) }}</td>
+            <td data-label="Edit">
               @if (editing) {
                 <form
                   id="item-editor"
@@ -340,19 +340,19 @@
         <tbody>
           @for (route of routes; track route.id) {
             <tr>
-              <td class="key">{{ route.routeNumber }}</td>
-              <td>
+              <td class="key" data-label="Route">{{ route.routeNumber }}</td>
+              <td data-label="Status">
                 <span class="status" [attr.data-status]="route.status">{{ route.status }}</span>
               </td>
-              <td>{{ route.driverName }}</td>
-              <td>{{ route.vehiclePlate }}</td>
-              <td>{{ route.slot ? route.slot + ' ' + route.serviceDate : 'dedicated' }}</td>
-              <td>
+              <td data-label="Driver">{{ route.driverName }}</td>
+              <td data-label="Vehicle">{{ route.vehiclePlate }}</td>
+              <td data-label="Schedule">{{ route.slot ? route.slot + ' ' + route.serviceDate : 'dedicated' }}</td>
+              <td data-label="Items on this leg">
                 @for (row of snapshotOf(route, leg.id); track row.itemId) {
                   <div>{{ row.itemCode }} · {{ row.barcode }}</div>
                 }
               </td>
-              <td>
+              <td data-label="Edit">
                 <button
                   type="button"
                   class="icon"

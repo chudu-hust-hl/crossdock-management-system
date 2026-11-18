@@ -5,6 +5,8 @@ import { environment } from '../../environments/environment';
 import {
   AppointmentsUpdate,
   ItemUpdate,
+  DockRoute,
+  DockTaskRow,
   Location,
   LoginResponse,
   Page,
@@ -73,6 +75,21 @@ export class ApiService {
 
   getRouteCandidates(id: string): Observable<RouteCandidate[]> {
     return this.http.get<RouteCandidate[]>(`${this.routeUrl(id)}/candidates`);
+  }
+
+  /** Inbound or outbound routes at one cross-dock. `query.direction` is required. */
+  getDockRoutes(locationId: string, query: ListQuery): Observable<Page<DockRoute>> {
+    return this.http.get<Page<DockRoute>>(
+      `${this.baseUrl}/docks/${encodeURIComponent(locationId)}/routes`,
+      { params: toHttpParams(query) },
+    );
+  }
+
+  /** PENDING dock tasks of one route at one dock, unless `query.status` says otherwise. */
+  getDockTasks(query: ListQuery): Observable<DockTaskRow[]> {
+    return this.http.get<DockTaskRow[]>(`${this.baseUrl}/dock-tasks`, {
+      params: toHttpParams(query),
+    });
   }
 
   /** Moves these child shipments onto the route. The answer is the route view. */

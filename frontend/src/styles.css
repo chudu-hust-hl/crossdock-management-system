@@ -179,12 +179,55 @@ label {
   color: var(--muted);
 }
 
+/*
+ * Search bars. Labels shrink the font, so a text field, a select, a date
+ * field and a button would otherwise end up at different heights (measured
+ * 32px, 28px and 34px). Every control is 40px: 15px type, a 38px line, and
+ * the 1px border. The 16px gap is the space between one control and the next.
+ */
 .filters {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
+  gap: calc(var(--space) * 2);
+  margin-bottom: calc(var(--space) * 3);
+}
+
+.filters label {
   gap: var(--space);
-  margin-bottom: calc(var(--space) * 2);
+}
+
+.filters input,
+.filters select,
+.filters button {
+  height: 40px;
+  margin: 0;
+  padding: 0 calc(var(--space) * 1.5);
+  font-size: 15px;
+  line-height: 38px;
+}
+
+.filters input[type='date']::-webkit-datetime-edit {
+  padding: 0;
+  line-height: 38px;
+}
+
+.filters input[type='file'] {
+  padding: 6px calc(var(--space) * 1.5);
+  line-height: 26px;
+}
+
+/* Search and Clear stay one pair, only as wide as their labels. */
+.filter-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: var(--space);
+}
+
+.filter-actions button {
+  width: auto;
+  flex: 0 0 auto;
 }
 
 /* An editor's inputs and its Save / Cancel buttons, side by side. */
@@ -349,4 +392,273 @@ h1 .status {
   border-color: var(--error);
   color: var(--error);
   background: #fdeceb;
+}
+
+/* Login controls fill the narrow panel and stay large enough to tap. */
+.login input,
+.login button {
+  width: 100%;
+  height: 48px;
+  padding: 0 calc(var(--space) * 1.5);
+  font-size: 16px;
+  line-height: 46px;
+}
+
+/*
+ * Phones. Scanning is done here, so the work page and every list have to be
+ * usable in one hand. 800px covers a phone in portrait and in landscape.
+ * Below that width the header stacks, each filter fills the row, and a table
+ * becomes one card per record (`data-label` on the cell is the card's caption).
+ */
+@media (max-width: 800px) {
+  h1 {
+    font-size: 1.35rem;
+    overflow-wrap: anywhere;
+  }
+
+  main {
+    padding: calc(var(--space) * 2);
+    overflow-x: clip;
+  }
+
+  .app-header {
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: var(--space) calc(var(--space) * 1.5);
+    padding: calc(var(--space) * 1.5);
+  }
+
+  .app-header strong {
+    flex: 1 1 auto;
+    align-self: center;
+  }
+
+  .app-header nav {
+    order: 3;
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space);
+  }
+
+  .app-header nav a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    border: 1px solid rgb(255 255 255 / 45%);
+  }
+
+  .app-header .session {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    margin-left: 0;
+    min-width: 0;
+  }
+
+  .app-header .session span {
+    overflow-wrap: anywhere;
+  }
+
+  .app-header .session button {
+    min-height: 44px;
+    flex-shrink: 0;
+  }
+
+  /*
+   * Search stays in two columns so a phone does not spend the screen on the
+   * form. The scan form stays one column: the barcode and the scan button
+   * need the full width.
+   */
+  .filters:not(.scan) {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: var(--space) calc(var(--space) * 1.5);
+    margin-bottom: calc(var(--space) * 2);
+  }
+
+  .filters:not(.scan) label {
+    flex: 1 1 calc(50% - 12px);
+    width: auto;
+    min-width: 0;
+    gap: calc(var(--space) / 2);
+  }
+
+  .filters:not(.scan) input,
+  .filters:not(.scan) select {
+    width: 100%;
+    height: 40px;
+    padding: 0 var(--space);
+    font-size: 16px;
+    line-height: 38px;
+  }
+
+  /* The pair drops to its own line and does not stretch. */
+  .filters:not(.scan) .filter-actions {
+    flex: 1 1 100%;
+  }
+
+  .filters:not(.scan) .filter-actions button {
+    width: auto;
+    height: 40px;
+    padding: 0 calc(var(--space) * 1.5);
+    font-size: 16px;
+    line-height: 38px;
+  }
+
+  .filters.scan {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filters.scan label,
+  .filters.scan input,
+  .filters.scan button {
+    width: 100%;
+  }
+
+  .filters.scan input,
+  .filters.scan button {
+    height: 48px;
+    font-size: 16px;
+    line-height: 46px;
+  }
+
+  /* The scan action is the control a person reaches for. Give it a taller row. */
+  .filters.scan button {
+    height: 56px;
+    font-size: 18px;
+    line-height: 54px;
+  }
+
+  .filters.scan input[type='file'] {
+    padding: 10px calc(var(--space) * 1.5);
+    line-height: 26px;
+  }
+
+  /* 16px type stops the phone from zooming in when a field is focused. */
+  .inline input,
+  .inline select,
+  .inline button {
+    height: 48px;
+    font-size: 16px;
+    line-height: 46px;
+  }
+
+  .inline {
+    display: flex;
+    width: 100%;
+  }
+
+  .inline input,
+  .inline select,
+  .inline button {
+    flex: 1 1 8rem;
+  }
+
+  .inline input[type='datetime-local'] {
+    flex-basis: 100%;
+  }
+
+  .pager {
+    flex-wrap: wrap;
+  }
+
+  .pager span {
+    flex: 1 1 100%;
+    order: -1;
+    text-align: center;
+  }
+
+  .pager button {
+    flex: 1 1 8rem;
+    height: 44px;
+  }
+
+  .fields {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .fields dd {
+    margin: 0 0 calc(var(--space) * 1.5);
+  }
+
+  .card {
+    padding: calc(var(--space) * 1.5);
+  }
+
+  table,
+  thead,
+  tbody,
+  tr,
+  td {
+    display: block;
+  }
+
+  thead {
+    display: none;
+  }
+
+  table {
+    background: transparent;
+  }
+
+  tr {
+    margin: 0 0 calc(var(--space) * 1.5);
+    padding: calc(var(--space) * 0.5) calc(var(--space) * 1.5);
+    background: var(--surface);
+    border: var(--border);
+  }
+
+  td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: calc(var(--space) * 1.5);
+    padding: calc(var(--space) * 1.25) 0;
+    border-bottom: var(--border);
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  td:last-child {
+    border-bottom: 0;
+  }
+
+  td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font-weight: 700;
+    color: var(--accent);
+    text-align: left;
+  }
+
+  td:not([data-label])::before,
+  td[data-label='']::before,
+  td[colspan]::before {
+    content: none;
+  }
+
+  td:not([data-label]),
+  td[colspan] {
+    display: block;
+    text-align: left;
+  }
+
+  td .key,
+  td .id,
+  td .status,
+  td .lane {
+    white-space: normal;
+  }
+
+  td .inline {
+    justify-content: flex-end;
+  }
+
+  td input[type='checkbox'] {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
 }

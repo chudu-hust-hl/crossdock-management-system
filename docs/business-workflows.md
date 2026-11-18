@@ -7,7 +7,7 @@ This document records business processes that span several collections: how Loca
 - Shipment booking (shipment, items, cost), routing, child shipments, and route assignment of a routed booking are implemented (§4, §5, §7).
 - Listing (filtered, sorted, paginated) and detail lookup of Locations and Shipments are implemented (§6, §7).
 - Token login, user management by `SYS_ADMIN`, and the role checks on the writes are implemented (§8).
-- Scanning, dock tasks, and the status changes that follow each dock action are specified in [`scanning-flows.md`](./scanning-flows.md). The backend implements them; the frontend has no dock screen yet.
+- Scanning, dock tasks, and the status changes that follow each dock action are specified in [`scanning-flows.md`](./scanning-flows.md). The backend implements them. The dock desk (§12 of that document) lists a cross-dock's inbound and outbound routes. Scanning from that screen is not built.
 
 ## 1. Location creation sources
 

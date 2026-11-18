@@ -12,6 +12,7 @@ import { DeliveryPointType } from '../../common/enums/delivery-point-type.enum';
 import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
 import { buildSort, findPage } from '../../common/utils/pagination.util';
 import { containsIgnoringCase } from '../../common/utils/text-filter.util';
+import { DockTaskStatus } from '../dock-tasks/enums/dock-task-status.enum';
 import { DockTask } from '../dock-tasks/schemas/dock-task.schema';
 import { ItemsService } from '../items/items.service';
 import { Item } from '../items/schemas/item.schema';
@@ -21,6 +22,14 @@ import { MetadataService } from '../metadata/metadata.service';
 import { ShipmentStatus } from '../shipments/enums/shipment-status.enum';
 import { DeliveryInfo } from '../shipments/schemas/delivery-info.schema';
 import { Shipment } from '../shipments/schemas/shipment.schema';
+import {
+  DockRoutePageResponse,
+  toDockRoutePageResponse,
+} from './dto/dock-route-response.dto';
+import {
+  DockDirection,
+  ListDockRoutesQueryDto,
+} from './dto/list-dock-routes-query.dto';
 import { ListRoutesQueryDto } from './dto/list-routes-query.dto';
 import { RouteCandidateResponse } from './dto/route-candidate-response.dto';
 import {
@@ -375,6 +384,48 @@ export class RoutesService {
     return toRoutePageResponse(page, locations);
   }
 
+  /**
+   * Non-deleted routes at one cross-dock. Inbound means this dock is the
+   * destination; outbound means it is the origin. Locations of the other ends
+   * and the pending-task counts are each one query for the page.
+   */
+  async findForDock(
+    locationId: string,
+    query: ListDockRoutesQueryDto,
+  ): Promise<DockRoutePageResponse> {
+    const location = await this.locationsService.findById(locationId);
+    if (location.type !== LocationType.CROSS_DOCK) {
+      throw new NotFoundException(`Location ${locationId} is not a cross-dock`);
+    }
+    const inbound = query.direction === DockDirection.INBOUND;
+    const page = await findPage(
+      this.routeModel,
+      {
+        ...this.buildListFilter(query),
+        ...(inbound
+          ? { toLocationId: locationId }
+          : { fromLocationId: locationId }),
+      },
+      buildSort('appointment.from', SortOrder.ASC),
+      query,
+    );
+    const otherIds = [
+      ...new Set(
+        page.items.map((route) =>
+          inbound ? route.fromLocationId : route.toLocationId,
+        ),
+      ),
+    ];
+    const [locations, pending] = await Promise.all([
+      this.locationsService.findSummariesByIds(otherIds),
+      this.pendingCounts(
+        page.items.map((route) => route.id),
+        locationId,
+      ),
+    ]);
+    return toDockRoutePageResponse(page, query.direction, locations, pending);
+  }
+
   /** One route, its two stop locations, and the shipments on it. */
   async findView(id: string): Promise<RouteViewResponse> {
     const route = await this.requireRoute(id);
@@ -479,6 +530,34 @@ export class RoutesService {
     this.appendShipments(route, shipmentIds, snapshots);
     await route.save();
     return this.viewOf(route.toObject());
+  }
+
+  /**
+   * PENDING tasks of these routes at one dock, one grouped query on the
+   * `routeId` + `locationId` + `status` index.
+   */
+  private async pendingCounts(
+    routeIds: string[],
+    locationId: string,
+  ): Promise<Map<string, number>> {
+    if (routeIds.length === 0) {
+      return new Map();
+    }
+    const rows = await this.dockTaskModel
+      .aggregate<{ _id: string; count: number }>([
+        {
+          $match: {
+            routeId: { $in: routeIds },
+            locationId,
+            status: DockTaskStatus.PENDING,
+            deletedAt: null,
+          },
+        },
+        { $group: { _id: '$routeId', count: { $sum: 1 } } },
+      ])
+      .hint({ routeId: 1, locationId: 1, status: 1 })
+      .exec();
+    return new Map(rows.map((row) => [row._id, row.count]));
   }
 
   private buildListFilter(query: ListRoutesQueryDto): FilterQuery<Route> {

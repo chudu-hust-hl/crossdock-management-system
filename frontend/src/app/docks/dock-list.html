@@ -1,0 +1,37 @@
+<h1>Docks</h1>
+
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else {
+  @let page = current.data;
+  @if (page.items.length === 0) {
+    <p class="muted">No docks found.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Province</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (dock of page.items; track dock.id) {
+          <tr>
+            <td data-label="Name">
+              <a class="key" [routerLink]="dock.id">{{ dock.name }}</a>
+            </td>
+            <td data-label="Province">{{ dock.address.province ?? '–' }}</td>
+            <td data-label="Status">
+              <span class="status" [attr.data-status]="dock.status">{{ dock.status }}</span>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+  <app-pager [page]="page.page" [limit]="page.limit" [total]="page.total" />
+}

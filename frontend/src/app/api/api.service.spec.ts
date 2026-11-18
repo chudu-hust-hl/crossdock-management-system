@@ -96,6 +96,22 @@ describe('ApiService', () => {
     move.flush({});
   });
 
+  it('lists a dock’s routes and its tasks', () => {
+    api.getDockRoutes(ULID, { direction: 'inbound', page: 1, limit: 20, status: '' }).subscribe();
+    api.getDockTasks({ locationId: ULID, routeId: ULID }).subscribe();
+
+    const routes = http.expectOne(
+      (req) => req.url === `${environment.apiBaseUrl}/docks/${ULID}/routes`,
+    );
+    expect(routes.request.method).toBe('GET');
+    expect(routes.request.params.toString()).toBe('direction=inbound&page=1&limit=20');
+    routes.flush({ items: [], page: 1, limit: 20, total: 0 });
+
+    const tasks = http.expectOne((req) => req.url === `${environment.apiBaseUrl}/dock-tasks`);
+    expect(tasks.request.params.toString()).toBe(`locationId=${ULID}&routeId=${ULID}`);
+    tasks.flush([]);
+  });
+
   it('reports loading, then the data', async () => {
     const states = firstValueFrom(load(api.getShipment(ULID)).pipe(toArray()));
     http.expectOne(`${environment.apiBaseUrl}/shipments/${ULID}`).flush({ id: ULID });

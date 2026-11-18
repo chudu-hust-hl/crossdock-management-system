@@ -1,0 +1,70 @@
+@let current = state();
+@if (current.status === 'loading') {
+  <p class="muted">Loading…</p>
+} @else if (current.status === 'error') {
+  <p class="error">{{ current.message }}</p>
+} @else if (!current.data.row) {
+  <h1>{{ current.data.routeNumber }} {{ direction() }}</h1>
+  <p class="error">This route is not {{ direction() }} at this dock.</p>
+} @else {
+  @let row = current.data.row;
+  <h1>
+    {{ current.data.routeNumber }}
+    {{ direction() }}
+    {{ placeLabel(row.otherEnd) }}
+    <span class="status" [attr.data-status]="row.stopStatus">{{ row.stopStatus }}</span>
+  </h1>
+  <p class="muted">{{ row.pendingTaskCount }} pending</p>
+}
+
+<p>
+  <a [routerLink]="['/docks', locationId()]">Back to the dock</a>
+  ·
+  <a [routerLink]="['/routes', routeId()]">Open the route</a>
+</p>
+
+@if (!canWork()) {
+  <p>You cannot work this dock.</p>
+} @else {
+  @let taskState = tasks();
+  @if (taskState === null || taskState.status === 'loading') {
+    <p class="muted">Loading…</p>
+  } @else if (taskState.status === 'error') {
+    <p class="error">{{ taskState.message }}</p>
+  } @else if (taskState.data.length === 0) {
+    <p class="muted">No tasks found.</p>
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Barcode</th>
+          <th>Task</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (task of taskState.data; track task.id) {
+          <tr>
+            <td data-label="Item">{{ task.itemCode ?? '–' }}</td>
+            <td data-label="Barcode">{{ task.barcode ?? '–' }}</td>
+            <td data-label="Task">{{ task.type }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+
+  <form class="filters scan">
+    <label>
+      Barcode
+      <input name="barcode" />
+    </label>
+    <label>
+      Photo
+      <input type="file" name="photo" />
+    </label>
+    <button type="submit" disabled title="Scanning is not available on this screen yet">
+      Scan
+    </button>
+  </form>
+}

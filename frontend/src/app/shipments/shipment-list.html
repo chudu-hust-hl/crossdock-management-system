@@ -20,8 +20,10 @@
       }
     </select>
   </label>
-  <button type="submit" class="primary">Search</button>
-  <button type="button" (click)="clear()">Clear</button>
+  <div class="filter-actions">
+    <button type="submit" class="primary">Search</button>
+    <button type="button" (click)="clear()">Clear</button>
+  </div>
 </form>
 
 @let current = state();

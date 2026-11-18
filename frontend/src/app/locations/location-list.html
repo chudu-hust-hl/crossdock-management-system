@@ -31,8 +31,10 @@
     Postal code
     <input name="postalCode" [value]="params().get('postalCode') ?? ''" />
   </label>
-  <button type="submit" class="primary">Search</button>
-  <button type="button" (click)="clear()">Clear</button>
+  <div class="filter-actions">
+    <button type="submit" class="primary">Search</button>
+    <button type="button" (click)="clear()">Clear</button>
+  </div>
 </form>
 
 @let current = state();
@@ -60,17 +62,17 @@
       <tbody>
         @for (location of page.items; track location.id) {
           <tr>
-            <td>
+            <td data-label="Name">
               <a class="key" [routerLink]="location.id">{{ location.name }}</a>
             </td>
-            <td>{{ location.type }}</td>
-            <td>
+            <td data-label="Type">{{ location.type }}</td>
+            <td data-label="Status">
               <span class="status" [attr.data-status]="location.status">{{ location.status }}</span>
             </td>
-            <td>{{ location.contactName ?? '–' }}</td>
-            <td>{{ location.address.postalCode }}</td>
-            <td>{{ location.address.city ?? '–' }}</td>
-            <td class="id muted">{{ location.id }}</td>
+            <td data-label="Contact">{{ location.contactName ?? '–' }}</td>
+            <td data-label="Postal code">{{ location.address.postalCode }}</td>
+            <td data-label="City">{{ location.address.city ?? '–' }}</td>
+            <td class="id muted" data-label="ID">{{ location.id }}</td>
           </tr>
         }
       </tbody>
